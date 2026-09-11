@@ -5,10 +5,14 @@
 //! everything the puzzle assumes they know:
 //!
 //! 1. drawing solids on the grid,
-//! 2. `Space` to start the ball rolling,
-//! 3. the scroll wheel to zoom,
-//! 4. `W`/`A`/`S`/`D` to pan,
-//! 5. closing an eternal loop.
+//! 2. `Tab` to nudge the ball forward one cell,
+//! 3. `Space` to start the ball rolling,
+//! 4. the scroll wheel to zoom,
+//! 5. `W`/`A`/`S`/`D` to pan,
+//! 6. closing an eternal loop.
+//!
+//! The objectives are a checklist, not a strict sequence: each is latched the
+//! moment it happens, so the player is free to do them in any order.
 //!
 //! The prompt is drawn as [`Text2d`] but pinned to the top-left of the screen
 //! every frame, so zooming and panning (the very things it teaches) can't
@@ -23,9 +27,10 @@ use crate::grid::Grid;
 use crate::paint::Mode;
 use crate::screen::{ScreenAnchor, ScreenText};
 
-/// The tutorial's objectives, in the order they are introduced.
-const OBJECTIVES: [&str; 5] = [
+/// The tutorial's objectives, in display order.
+const OBJECTIVES: [&str; 6] = [
     "Draw on the grid (left-click and drag)",
+    "Press TAB to nudge the ball one step",
     "Press SPACE to start rolling the ball",
     "Scroll the mouse wheel to zoom in and out",
     "Hold W, A, S, D to pan the view",
@@ -36,25 +41,20 @@ const OBJECTIVES: [&str; 5] = [
 #[derive(Default, Clone, Copy)]
 struct Observed {
     drawn: bool,
+    stepped: bool,
     rolled: bool,
     zoomed: bool,
     panned: bool,
     looped: bool,
 }
 
-/// Progress through the tutorial.
-///
-/// `step` is the objective currently being taught. Because the player may do
-/// them out of order (for example scroll before drawing), each action is
-/// latched and completed objectives are skipped as soon as the player reaches
-/// them.
+/// Progress through the tutorial. Each flag latches once its action is seen.
 #[derive(Resource, Default)]
 pub struct Tutorial {
     /// True while a tutorial level is loaded.
     active: bool,
-    /// Index of the current objective; `== OBJECTIVES.len()` when complete.
-    step: usize,
     drawn: bool,
+    stepped: bool,
     rolled: bool,
     zoomed: bool,
     panned: bool,
@@ -77,31 +77,31 @@ impl Tutorial {
 
     /// Has every objective been met?
     pub fn complete(&self) -> bool {
-        self.step >= OBJECTIVES.len()
+        let flags = self.flags();
+        flags.iter().all(|done| *done)
     }
 
-    /// Latch the actions seen this frame and advance past every objective that
-    /// is now satisfied. Split out from the system so it can be unit-tested.
+    /// Per-objective latches, in [`OBJECTIVES`] order.
+    fn flags(&self) -> [bool; OBJECTIVES.len()] {
+        [
+            self.drawn,
+            self.stepped,
+            self.rolled,
+            self.zoomed,
+            self.panned,
+            self.looped,
+        ]
+    }
+
+    /// Latch the actions seen this frame. Split out from the system so it can
+    /// be unit-tested.
     fn observe(&mut self, observed: Observed) {
         self.drawn |= observed.drawn;
+        self.stepped |= observed.stepped;
         self.rolled |= observed.rolled;
         self.zoomed |= observed.zoomed;
         self.panned |= observed.panned;
         self.looped |= observed.looped;
-        while !self.complete() && self.current_done() {
-            self.step += 1;
-        }
-    }
-
-    fn current_done(&self) -> bool {
-        match self.step {
-            0 => self.drawn,
-            1 => self.rolled,
-            2 => self.zoomed,
-            3 => self.panned,
-            4 => self.looped,
-            _ => true,
-        }
     }
 }
 
@@ -130,7 +130,7 @@ pub fn setup_tutorial(mut commands: Commands) {
     ));
 }
 
-/// Watch the player and advance the current objective.
+/// Watch the player and latch the current objective.
 pub fn track_tutorial(
     keys: Res<ButtonInput<KeyCode>>,
     mode: Res<Mode>,
@@ -145,12 +145,14 @@ pub fn track_tutorial(
         return;
     }
 
+    let running = *mode == Mode::Run;
     // The pen can only add solids that the level did not lock, so any such
     // cell means the player has drawn something of their own.
     let drawn = grid
         .solids
         .iter()
         .any(|cell| !grid.locked.contains(cell));
+    let stepped = running && keys.just_pressed(KeyCode::Tab);
     let panned = keys.any_just_pressed([
         KeyCode::KeyW,
         KeyCode::KeyA,
@@ -159,25 +161,27 @@ pub fn track_tutorial(
     ]);
     tutorial.observe(Observed {
         drawn,
-        rolled: *mode == Mode::Run,
+        stepped,
+        rolled: running,
         zoomed: scrolled,
         panned,
         looped: run.outcome == Outcome::Won,
     });
 }
 
-/// Write the current objectives (and their check marks) into the prompt.
+/// Write the checklist into the prompt.
 pub fn draw_tutorial(tutorial: Res<Tutorial>, mut texts: Query<&mut Text2d, With<TutorialText>>) {
     for mut text in &mut texts {
         if !tutorial.active {
             text.0.clear();
         } else if tutorial.complete() {
             text.0 =
-                "TUTORIAL COMPLETE\n\nPress SPACE to stop the ball,\nor TAB for the next level.".into();
+                "TUTORIAL COMPLETE\n\nPress SPACE to stop the ball,\nor PageDown for the next level.".into();
         } else {
+            let flags = tutorial.flags();
             let mut body = String::from("TUTORIAL\n\n");
-            for (i, objective) in OBJECTIVES.iter().enumerate() {
-                let mark = if i < tutorial.step { 'x' } else { ' ' };
+            for (objective, done) in OBJECTIVES.iter().zip(flags) {
+                let mark = if done { 'x' } else { ' ' };
                 body.push_str(&format!("[{mark}] {objective}\n"));
             }
             text.0 = body;
@@ -204,36 +208,47 @@ pub fn apply_tutorial_visibility(
 mod tests {
     use super::*;
 
+    fn all() -> Observed {
+        Observed {
+            drawn: true,
+            stepped: true,
+            rolled: true,
+            zoomed: true,
+            panned: true,
+            looped: true,
+        }
+    }
+
     #[test]
-    fn objectives_can_be_completed_out_of_order() {
+    fn objectives_latch_independently() {
         let mut tutorial = Tutorial {
             active: true,
             ..default()
         };
 
-        // Scroll first: it is latched, but drawing is still the current goal.
+        // Only scroll: exactly that box is ticked, nothing else.
         tutorial.observe(Observed {
             zoomed: true,
             ..default()
         });
-        assert_eq!(tutorial.step, 0);
+        assert_eq!(tutorial.flags(), [false, false, false, true, false, false]);
+        assert!(!tutorial.complete());
 
-        // Drawing advances past goal 0 but stops at starting the ball.
+        // Looping before space/tab still latches.
         tutorial.observe(Observed {
-            drawn: true,
-            ..default()
-        });
-        assert_eq!(tutorial.step, 1);
-
-        // Space + pan + a completed loop then sweep the remaining goals,
-        // including the scroll that was already latched.
-        tutorial.observe(Observed {
-            rolled: true,
-            panned: true,
             looped: true,
             ..default()
         });
-        assert_eq!(tutorial.step, 5);
+        assert_eq!(tutorial.flags(), [false, false, false, true, false, true]);
+    }
+
+    #[test]
+    fn all_objectives_together_complete_it() {
+        let mut tutorial = Tutorial {
+            active: true,
+            ..default()
+        };
+        tutorial.observe(all());
         assert!(tutorial.complete());
     }
 
@@ -241,18 +256,11 @@ mod tests {
     fn loading_a_non_tutorial_level_clears_progress() {
         let mut tutorial = Tutorial::default();
         tutorial.set_level(true);
-        tutorial.observe(Observed {
-            drawn: true,
-            rolled: true,
-            zoomed: true,
-            panned: true,
-            looped: true,
-        });
+        tutorial.observe(all());
         assert!(tutorial.complete());
 
         tutorial.set_level(false);
         assert!(!tutorial.active);
-        assert_eq!(tutorial.step, 0);
         assert!(!tutorial.complete());
     }
 
@@ -260,15 +268,8 @@ mod tests {
     fn reloading_a_tutorial_restarts_it() {
         let mut tutorial = Tutorial::default();
         tutorial.set_level(true);
-        tutorial.observe(Observed {
-            drawn: true,
-            rolled: true,
-            zoomed: true,
-            panned: true,
-            looped: true,
-        });
+        tutorial.observe(all());
         tutorial.set_level(true);
-        assert_eq!(tutorial.step, 0);
         assert!(!tutorial.complete());
     }
 }

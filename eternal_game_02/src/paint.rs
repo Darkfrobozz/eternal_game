@@ -71,7 +71,7 @@ pub fn setup_grid(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
 
     commands.spawn((
         Text2d::new(
-            "Space: pen/run   Left-drag: draw   Right-drag: erase   Middle-click: place   B: auto start   [ ]: start charge\nN: step   M: auto/manual   scroll: zoom   WASD: pan   Y/L: save/load   C: clear",
+            "Space: pen/run   Tab: nudge step   Left-drag: draw   Right-drag: erase   Middle-click: place   B: auto start   [ ]: start charge\nN: step (manual)   M: auto/manual   PageDown: next level   scroll: zoom   WASD: pan   Y/L: save/load   C: clear",
         ),
         TextFont {
             font_size: FontSize::Px(15.0),

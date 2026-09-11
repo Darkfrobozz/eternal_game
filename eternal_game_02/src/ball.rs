@@ -370,7 +370,11 @@ pub fn manual_step(
     mut run: ResMut<Run>,
     mut balls: Query<&mut Ball>,
 ) {
-    if !tuning.manual || run.outcome != Outcome::Running || !keys.just_pressed(KeyCode::KeyN) {
+    // `Tab` always nudges the ball one cell. `N` does the same, but only in
+    // the debug manual mode where automatic stepping is already paused.
+    let nudge = keys.just_pressed(KeyCode::Tab)
+        || (tuning.manual && keys.just_pressed(KeyCode::KeyN));
+    if !nudge || run.outcome != Outcome::Running {
         return;
     }
     for mut ball in &mut balls {

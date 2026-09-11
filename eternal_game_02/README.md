@@ -66,20 +66,23 @@ The game opens on a title menu:
   (in the editor, press `Y` to save first — `Esc` does not auto-save).
 
 Progress is written by `load_level` whenever a game level is loaded, including
-`Tab`; the tutorial and the editor never overwrite a `Continue`.
+`PageDown`; the tutorial and the editor never overwrite a `Continue`.
 
 ### Playing
 
-Normal (play-only): `Space` pen / run, left-drag draws solids, right-drag
-erases, `C` clears. The charge readout and controller hint are hidden; the
-player infers charge from the arrows (green accumulates, orange consumes) and
-the ball's battery colour (grey depleted, hue shifting as it charges).
+Normal (play-only): `Space` pen / run, `Tab` nudges the ball one cell
+mid-run, `PageDown` loads the next game level, left-drag draws solids,
+right-drag erases, `C` clears. The charge readout and controller hint are
+hidden; the player infers charge from the arrows (green accumulates, orange
+consumes) and the ball's battery colour (grey depleted, hue shifting as it
+charges).
 
 `H` toggles **debug / map-editor mode**, which shows the HUD and enables:
 
 - Middle-click places the start; `B` clears it back to the automatic start.
 - `[` / `]` adjust the start charge.
-- `M` toggles auto / manual stepping; `N` steps once while manual.
+- `M` toggles auto / manual stepping; `N` steps once while manual (in addition
+  to the always-available `Tab`).
 - `Y` / `L` save / load `debug_config.txt`.
 - Scroll wheel zooms, WASD pans.
 
@@ -88,9 +91,9 @@ the ball's battery colour (grey depleted, hue shifting as it charges).
 `levels/*.txt` use the config format. On load, `lock_solids` records the level's
 **solid** cells so the eraser cannot remove them (the derived surface is not
 locked — but since it is derived, erasing a surface cell is a no-op anyway).
-`Tab` cycles the **game** levels (skipping the tutorial); the debug HUD shows
-the current file name. A level's `place` and `start_charge` are its starting
-condition.
+`PageDown` cycles the **game** levels (skipping the tutorial); the debug HUD
+shows the current file name. A level's `place` and `start_charge` are its
+starting condition.
 
 A level is positioned wherever its cells sit in the 160×120 board. The camera
 opens centred on the board centre, so to centre a level on screen its **solid
@@ -111,20 +114,23 @@ cells if you want it in the middle.
 ## Tutorial
 
 The tutorial is attached to any level file whose name contains `tutorial`.
-Loading such a level activates [`Tutorial`](src/tutorial.rs), which walks the
-player through five objectives:
+Loading such a level activates [`Tutorial`](src/tutorial.rs), which shows a
+six-item checklist:
 
 1. draw on the grid (left-click and drag),
-2. `Space` to start rolling the ball,
-3. the scroll wheel to zoom,
-4. `W`/`A`/`S`/`D` to pan,
-5. make the ball loop forever (a `Won` run).
+2. `Tab` to nudge the ball one cell,
+3. `Space` to start rolling,
+4. the scroll wheel to zoom,
+5. `W`/`A`/`S`/`D` to pan,
+6. make the ball loop forever (a `Won` run).
 
 Drawing is detected as any solid the level did not lock, and looping as
-`run.outcome == Outcome::Won`. Objectives can be completed in any order; each
-is latched and skipped once met. The prompt is a `Text2d` pinned to the
-top-left with `ScreenText`, so it stays readable while the player is zooming
-and panning. Tab away and the tutorial deactivates; tab back and it restarts.
+`run.outcome == Outcome::Won`. The checklist is not a strict sequence: each
+item latches the moment it happens, so `Space` can be done before `Tab` even
+though it is listed later. The prompt is a `Text2d` pinned to the top-left
+with `ScreenText`, so it stays readable while the player is zooming and
+panning. Loading any other level deactivates it; reloading the tutorial
+restarts the checklist.
 
 ## Map editor workflow
 

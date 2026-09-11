@@ -356,7 +356,8 @@ pub fn setup_levels(
     info!("Found {} level(s) in levels/", levels.files.len());
 }
 
-/// `Tab` loads the next level.
+/// `PageDown` loads the next game level. (`Tab` is reserved for nudging the
+/// ball one step, see [`crate::ball::manual_step`].)
 #[allow(clippy::too_many_arguments)]
 pub fn cycle_level(
     keys: Res<ButtonInput<KeyCode>>,
@@ -369,7 +370,7 @@ pub fn cycle_level(
     mut tutorial: ResMut<Tutorial>,
     mut progress: ResMut<Progress>,
 ) {
-    if !keys.just_pressed(KeyCode::Tab) {
+    if !keys.just_pressed(KeyCode::PageDown) {
         return;
     }
     if let Some(path) = levels.next_game() {
