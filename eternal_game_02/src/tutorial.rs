@@ -189,7 +189,7 @@ pub fn draw_tutorial(tutorial: Res<Tutorial>, mut texts: Query<&mut Text2d, With
             text.0.clear();
         } else if tutorial.complete() {
             text.0 =
-                "TUTORIAL COMPLETE\n\nPress SPACE to stop the ball,\nor PageDown for the next level.".into();
+                "TUTORIAL COMPLETE\n\nPress E to leave run mode,\nor PageDown for the next level.".into();
         } else {
             let flags = tutorial.flags();
             let mut body = String::from("TUTORIAL\n\n");

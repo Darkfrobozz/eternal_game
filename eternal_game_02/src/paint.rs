@@ -71,7 +71,7 @@ pub fn setup_grid(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
 
     commands.spawn((
         Text2d::new(
-            "Space: roll/stop   Tab: nudge/manual   Left-drag: draw   Right-drag: erase   Middle-click: place   B: auto start   [ ]: start charge\nN: step (manual)   M: auto/manual   PageDown: next level   scroll: zoom   WASD: pan   Y/L: save/load   C: clear",
+            "Space: roll/stop   Tab: nudge/manual   E: leave run   Left-drag: draw   Right-drag: erase   Middle-click: place   B: auto start   [ ]: start charge\nN: step (manual)   M: auto/manual   PageDown: next level   scroll: zoom   WASD: pan   Y/L: save/load   C: clear",
         ),
         TextFont {
             font_size: FontSize::Px(15.0),
@@ -154,9 +154,9 @@ pub fn place_start(
     }
 }
 
-/// `Space` starts the ball rolling and stops it again. `Tab` takes manual
-/// control: from pen mode it enters run mode paused, and in run mode every
-/// press nudges the ball one cell (see [`ball::manual_step`]).
+/// `Space` starts the ball rolling and stops it again, `Tab` takes manual
+/// control (from pen mode it enters run mode paused; in run mode it nudges), and
+/// `E` leaves run mode from either state.
 pub fn handle_mode(
     keys: Res<ButtonInput<KeyCode>>,
     mut commands: Commands,
@@ -169,12 +169,17 @@ pub fn handle_mode(
 ) {
     let space = keys.just_pressed(KeyCode::Space);
     let tab = keys.just_pressed(KeyCode::Tab);
-    if !space && !tab {
+    let leave = keys.just_pressed(KeyCode::KeyE);
+    if !space && !tab && !leave {
         return;
     }
 
     match *mode {
         Mode::Paint => {
+            // `E` only leaves run mode, so it does nothing here.
+            if !space && !tab {
+                return;
+            }
             *mode = Mode::Run;
             // `Tab` enters run mode paused for manual stepping; `Space` starts
             // it rolling.
@@ -196,6 +201,10 @@ pub fn handle_mode(
             }
         }
         Mode::Run => {
+            if leave {
+                leave_run(&mut commands, &mut mode, &mut grid, &balls);
+                return;
+            }
             if tab {
                 // Take manual control; `manual_step` performs the nudge.
                 tuning.manual = true;
@@ -206,15 +215,25 @@ pub fn handle_mode(
                     tuning.manual = false;
                 } else {
                     // Stop and return to the pen.
-                    *mode = Mode::Paint;
-                    for entity in &balls {
-                        commands.entity(entity).despawn();
-                    }
-                    grid.reset_trail();
+                    leave_run(&mut commands, &mut mode, &mut grid, &balls);
                 }
             }
         }
     }
+}
+
+/// Despawn the ball and return to pen mode, clearing its trail.
+fn leave_run(
+    commands: &mut Commands,
+    mode: &mut Mode,
+    grid: &mut Grid,
+    balls: &Query<Entity, With<Ball>>,
+) {
+    *mode = Mode::Paint;
+    for entity in balls {
+        commands.entity(entity).despawn();
+    }
+    grid.reset_trail();
 }
 
 /// Blit the array into the texture, but only when something changed.
