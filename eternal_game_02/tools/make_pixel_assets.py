@@ -272,6 +272,65 @@ def make_solid():
     return fb
 
 
+# --- rain drop / splat -----------------------------------------------------
+
+DROP_DARK = (108, 128, 156, 255)
+DROP_MID = (176, 200, 224, 255)
+DROP_HI = (238, 248, 255, 255)
+
+
+def make_drop():
+    """A teardrop: round-bottomed, tapering to a point at the top. Falling
+    straight down, the round end leads."""
+    W, H = 16, 24
+    fb = FB(W, H)
+    cx, cy, r = W / 2.0, 16.0, 7.0
+    for y in range(H):
+        for x in range(W):
+            fx, fy = x + 0.5, y + 0.5
+            half = 0.0
+            dy = fy - cy
+            if -r <= dy <= r:
+                half = max(half, (r * r - dy * dy) ** 0.5)
+            if fy < cy:
+                half = max(half, r * (fy / cy) ** 0.7)
+            off = fx - cx
+            if half <= 0.0 or abs(off) > half:
+                continue
+            edge = half - abs(off)
+            if edge < 1.1:
+                c = DROP_DARK
+            elif off < -1.0 and -4.0 < dy < 2.0 and edge > 2.5:
+                c = DROP_HI
+            else:
+                c = DROP_MID
+            fb.put(x, y, c)
+    return fb
+
+
+def make_splat():
+    """A soft ball, scaled non-uniformly in-engine into an ellipse and then a
+    flat puddle."""
+    S = 16
+    fb = FB(S, S)
+    c, r = S / 2.0, 7.0
+    for y in range(S):
+        for x in range(S):
+            fx, fy = x + 0.5, y + 0.5
+            dx, dy = fx - c, fy - c
+            d = (dx * dx + dy * dy) ** 0.5
+            if d > r:
+                continue
+            if d > r - 1.2:
+                col = DROP_DARK
+            elif dx < -1.5 and dy < 0.0 and d < r - 3.0:
+                col = DROP_HI
+            else:
+                col = DROP_MID
+            fb.put(x, y, col)
+    return fb
+
+
 # --- transform / tint / preview --------------------------------------------
 
 def rotate(fb, deg):
@@ -385,11 +444,15 @@ def main():
     core = make_core()
     panel = make_panel()
     solid = make_solid()
+    drop = make_drop()
+    splat = make_splat()
 
     write_png(os.path.join(out, "ball_shell.png"), shell.w, shell.h, shell.px)
     write_png(os.path.join(out, "ball_core.png"), core.w, core.h, core.px)
     write_png(os.path.join(out, "battery_panel.png"), panel.w, panel.h, panel.px)
     write_png(os.path.join(out, "solid_block.png"), solid.w, solid.h, solid.px)
+    write_png(os.path.join(out, "rain_drop.png"), drop.w, drop.h, drop.px)
+    write_png(os.path.join(out, "splat.png"), splat.w, splat.h, splat.px)
 
     # A grid of blocks, so the corner pattern can be checked for continuity.
     sheet = scale_up(tile_sheet(solid, 4, 3), 8)
@@ -402,8 +465,10 @@ def main():
     ascii_preview(core, "ball_core.png")
     ascii_preview(panel, "battery_panel.png")
     ascii_preview(solid, "solid_block.png")
+    ascii_preview(drop, "rain_drop.png")
+    ascii_preview(splat, "splat.png")
     print("\nWrote ball_shell.png, ball_core.png, battery_panel.png,")
-    print("solid_block.png, solid_preview.png, preview.png")
+    print("solid_block.png, solid_preview.png, rain_drop.png, splat.png, preview.png")
 
 
 if __name__ == "__main__":

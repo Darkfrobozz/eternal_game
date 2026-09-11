@@ -408,7 +408,7 @@ impl Grid {
     /// Pixel colour for a cell, as raw sRGB bytes ready for the texture.
     pub fn color(cell: Cell) -> [u8; 4] {
         match cell {
-            Cell::Empty => [22, 22, 30, 255],
+            Cell::Empty => [0, 0, 0, 0],
             Cell::Solid => [104, 112, 130, 255],
             Cell::Surface => [58, 92, 150, 255],
             Cell::Trail => [70, 200, 150, 255],

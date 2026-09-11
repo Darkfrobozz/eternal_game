@@ -10,6 +10,7 @@ mod explosion;
 mod grid;
 mod menu;
 mod paint;
+mod rain;
 mod screen;
 mod tutorial;
 
@@ -30,6 +31,10 @@ use menu::{Menu, Screen, draw_menu, menu_input, setup_menu};
 use paint::{
     Brush, Debug, Mode, Placement, apply_hud, handle_mode, paint, place_start, report_outcome,
     apply_solids, setup_grid, setup_solid_tile, sync_image, toggle_debug, watch_solid_tile,
+};
+use rain::{
+    apply_atmosphere_visibility, setup_background, setup_rain, setup_rain_assets, update_impact,
+    update_rain, update_splash,
 };
 use screen::position_screen_text;
 use tutorial::{
@@ -78,11 +83,14 @@ fn main() {
         .init_resource::<Menu>()
         .init_resource::<Screen>()
         .init_resource::<Detonation>()
+        .insert_resource(ClearColor(Color::BLACK))
         .add_systems(
             Startup,
             (
                 setup_grid,
                 setup_solid_tile,
+                setup_background,
+                setup_rain_assets,
                 setup_levels,
                 setup_camera,
                 setup_tutorial,
@@ -93,6 +101,7 @@ fn main() {
             )
                 .chain(),
         )
+        .add_systems(PostStartup, setup_rain)
         .add_systems(
             Update,
             (
@@ -135,6 +144,13 @@ fn main() {
                 .after(step_ball)
                 .after(manual_step),
         )
+        // The backdrop and rain are independent of the board simulation, so
+        // they get their own set (and keep the main chain under the tuple
+        // size limit).
+        .add_systems(
+            Update,
+            (apply_atmosphere_visibility, update_rain, update_impact, update_splash).chain(),
+        )
         // Screen-space labels and the tutorial read input and react to the
         // camera, so they run after it has been moved this frame.
         .add_systems(
@@ -154,8 +170,21 @@ fn main() {
 }
 
 fn setup_camera(mut commands: Commands) {
-    commands.spawn(Camera2d);
+    commands.spawn((
+        Camera2d,
+        Projection::Orthographic(OrthographicProjection {
+            scale: DEFAULT_ZOOM,
+            ..OrthographicProjection::default_2d()
+        }),
+    ));
 }
+
+/// Closest the camera can zoom in (smallest orthographic scale).
+const MIN_ZOOM: f32 = 0.15;
+/// Furthest the camera can pull back (largest orthographic scale).
+const MAX_ZOOM: f32 = 2.0;
+/// Default view: the middle of the allowed zoom range.
+const DEFAULT_ZOOM: f32 = (MIN_ZOOM + MAX_ZOOM) / 2.0;
 
 fn in_paint_mode(mode: Res<Mode>, screen: Res<Screen>) -> bool {
     *mode == Mode::Paint && *screen != Screen::Menu
@@ -176,19 +205,20 @@ fn camera_controls(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
     mut wheel: MessageReader<MouseWheel>,
-    mut camera: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
+    mut camera: Query<(&mut Transform, &mut Projection, &Camera), With<Camera2d>>,
 ) {
     let mut zoom = 0.0;
     for event in wheel.read() {
         zoom += event.y;
     }
     let pan_speed = 600.0 * time.delta_secs();
+    let world_half = Vec2::new(GRID_W as f32, GRID_H as f32) * CELL_PX * 0.5;
 
-    for (mut transform, mut projection) in &mut camera {
+    for (mut transform, mut projection, camera) in &mut camera {
         let mut scale = 1.0;
         if let Projection::Orthographic(ortho) = &mut *projection {
             if zoom != 0.0 {
-                ortho.scale = (ortho.scale * 0.9_f32.powf(zoom)).clamp(0.15, 4.0);
+                ortho.scale = (ortho.scale * 0.9_f32.powf(zoom)).clamp(MIN_ZOOM, MAX_ZOOM);
             }
             scale = ortho.scale;
         }
@@ -207,6 +237,16 @@ fn camera_controls(
         }
         if pan != Vec2::ZERO {
             transform.translation += (pan.normalize() * pan_speed * scale).extend(0.0);
+        }
+
+        // Keep the board filling the view: never show anything beyond the
+        // world. If the view is bigger than the world on an axis, the limit
+        // collapses to zero and the camera just centres on that axis.
+        if let Some(viewport) = camera.logical_viewport_size() {
+            let half_view = viewport * scale * 0.5;
+            let limit = (world_half - half_view).max(Vec2::ZERO);
+            transform.translation.x = transform.translation.x.clamp(-limit.x, limit.x);
+            transform.translation.y = transform.translation.y.clamp(-limit.y, limit.y);
         }
     }
 }
