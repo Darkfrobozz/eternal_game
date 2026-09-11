@@ -9,10 +9,12 @@
 //! * moving **up or level** (`dy >= 0`) consumes the same amount,
 //! * charge hitting zero ends the run.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
+use bevy::asset::RenderAssetUsages;
 use bevy::image::{ImageLoaderSettings, ImageSampler};
 use bevy::prelude::*;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 use crate::grid::{CELL_PX, Cell, GRID_H, Grid, NEIGHBORS4, NEIGHBORS8};
 
@@ -178,6 +180,9 @@ pub struct Run {
     pub laps: u32,
     /// Step-rate multiplier. Grows every lap, so an eternal loop accelerates.
     pub speed: f32,
+    /// Total moves made since the run began, including ones dropped from the
+    /// front of [`Run::itinerary`]. Drives the itinerary arrow sprites.
+    pub total_moves: u64,
 }
 
 impl Default for Run {
@@ -193,6 +198,7 @@ impl Default for Run {
             solved: false,
             laps: 0,
             speed: 1.0,
+            total_moves: 0,
         }
     }
 }
@@ -402,6 +408,7 @@ pub fn start_run(run: &mut Run, grid: &Grid, start: IVec2, charge: f32) {
     run.solved = false;
     run.laps = 0;
     run.speed = 1.0;
+    run.total_moves = 0;
 }
 
 /// One tile of movement. Public so the headless replay can drive it.
@@ -568,6 +575,7 @@ pub(crate) fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
         combo,
         charge,
     });
+    run.total_moves += 1;
 
     // Returning to the loop-closure cell completes a lap. Every lap runs
     // faster, so a solved loop visibly accelerates toward its eternal state.
@@ -708,21 +716,119 @@ pub fn manual_step(
     }
 }
 
+/// The generated arrow sprite used for the itinerary.
+#[derive(Resource)]
+pub struct ArrowTexture(pub Handle<Image>);
+
+/// Marker for one itinerary arrow sprite.
+#[derive(Component)]
+pub struct ItineraryArrow;
+
+/// Z of the itinerary arrows: above the grid, below the ball, so the ball is
+/// never hidden behind its own trail.
+const ARROW_Z: f32 = 2.0;
+
+/// Generate the arrow texture once at startup.
+pub fn setup_arrow_texture(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+    commands.insert_resource(ArrowTexture(images.add(arrow_image())));
+}
+
+/// A white arrow pointing up (`+y`), tinted per move by the sprite colour.
+fn arrow_image() -> Image {
+    const SIZE: u32 = 24;
+    let mut data = vec![0u8; (SIZE * SIZE * 4) as usize];
+    let cx = SIZE as f32 * 0.5;
+    for y in 0..SIZE {
+        for x in 0..SIZE {
+            let dx = (x as f32 + 0.5 - cx).abs();
+            let fy = y as f32 + 0.5;
+            // Head: a triangle from the tip down to y=14.
+            let head = fy <= 14.0 && dx <= (fy / 14.0) * 8.0;
+            // Shaft below the head.
+            let shaft = fy >= 12.0 && dx <= 3.0;
+            if head || shaft {
+                let i = ((y * SIZE + x) * 4) as usize;
+                data[i..i + 4].copy_from_slice(&[255, 255, 255, 255]);
+            }
+        }
+    }
+    let mut image = Image::new(
+        Extent3d {
+            width: SIZE,
+            height: SIZE,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::MAIN_WORLD | RenderAssetUsages::RENDER_WORLD,
+    );
+    image.sampler = ImageSampler::nearest();
+    image
+}
+
 /// Draw the movement itinerary: an arrow at every cell the ball left, coloured
 /// purely by what the step did to the charge — green accumulates, orange
-/// consumes. A horizontal is just +1 (green) or -1 (orange) like anything else.
-pub fn draw_itinerary(run: Res<Run>, grid: Res<Grid>, mut gizmos: Gizmos) {
-    for m in &run.itinerary {
+/// consumes. The arrows are sprites at [`ARROW_Z`], so the ball draws over them.
+pub fn draw_itinerary(
+    mut commands: Commands,
+    run: Res<Run>,
+    grid: Res<Grid>,
+    arrows: Res<ArrowTexture>,
+    mut state: Local<(u64, u64, VecDeque<Entity>)>,
+) {
+    let (front, next, spawned) = &mut *state;
+
+    // A fresh run (or a cleared itinerary) drops every arrow.
+    if run.total_moves == 0 {
+        for entity in spawned.drain(..) {
+            commands.entity(entity).despawn();
+        }
+        *front = 0;
+        *next = 0;
+        return;
+    }
+
+    // Moves that fell off the front of the trimmed itinerary lose their arrow.
+    let base = run.total_moves - run.itinerary.len() as u64;
+    while *front < base {
+        if let Some(entity) = spawned.pop_front() {
+            commands.entity(entity).despawn();
+        }
+        *front += 1;
+    }
+
+    // Spawn an arrow for every move recorded since last frame.
+    while *next < run.total_moves {
+        let m = run.itinerary[(*next - base) as usize];
+        let dir = m.dir.as_vec2();
         let start = grid.cell_to_world(m.cell);
-        let end = start + m.dir.as_vec2() * (CELL_PX * 0.9);
         let color = if m.charge > 0.0 {
             Color::srgb(0.30, 0.85, 0.35)
         } else {
             Color::srgb(1.0, 0.55, 0.10)
         };
-        gizmos
-            .arrow_2d(start, end, color)
-            .with_tip_length(CELL_PX * 0.45);
+        let entity = commands
+            .spawn((
+                ItineraryArrow,
+                Sprite {
+                    image: arrows.0.clone(),
+                    color,
+                    custom_size: Some(Vec2::new(CELL_PX * 0.6, CELL_PX * 0.9)),
+                    ..default()
+                },
+                Transform::from_xyz(
+                    start.x + dir.x * CELL_PX * 0.45,
+                    start.y + dir.y * CELL_PX * 0.45,
+                    ARROW_Z,
+                )
+                .with_rotation(Quat::from_rotation_z(
+                    dir.to_angle() - std::f32::consts::FRAC_PI_2,
+                )),
+            ))
+            .id();
+        spawned.push_back(entity);
+        *next += 1;
     }
 }
 

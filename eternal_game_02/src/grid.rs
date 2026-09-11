@@ -16,6 +16,9 @@ pub const GRID_W: i32 = 160;
 pub const GRID_H: i32 = 120;
 /// How many world units one cell covers.
 pub const CELL_PX: f32 = 6.0;
+/// How many texture pixels one cell covers in the grid image, so a cell can
+/// carry a detailed tile (the metal block). Must match `solid_block.png`.
+pub const CELL_TEX: i32 = 16;
 
 /// The eight neighbours, in counter-clockwise order starting east.
 ///
@@ -406,7 +409,7 @@ impl Grid {
     pub fn color(cell: Cell) -> [u8; 4] {
         match cell {
             Cell::Empty => [22, 22, 30, 255],
-            Cell::Solid => [232, 235, 242, 255],
+            Cell::Solid => [104, 112, 130, 255],
             Cell::Surface => [58, 92, 150, 255],
             Cell::Trail => [70, 200, 150, 255],
         }

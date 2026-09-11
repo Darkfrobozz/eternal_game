@@ -17,8 +17,8 @@ use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;
 
 use ball::{
-    Run, Tuning, draw_itinerary, manual_step, setup_ball_texture, step_ball, tune_start_charge,
-    update_ball_color, update_ball_transform, update_charge_text,
+    Run, Tuning, draw_itinerary, manual_step, setup_arrow_texture, setup_ball_texture, step_ball,
+    tune_start_charge, update_ball_color, update_ball_transform, update_charge_text,
 };
 use grid::{CELL_PX, GRID_H, GRID_W};
 use config::{Levels, Progress, advance_detonation, cycle_level, setup_levels, update_level_text};
@@ -29,7 +29,7 @@ use explosion::{
 use menu::{Menu, Screen, draw_menu, menu_input, setup_menu};
 use paint::{
     Brush, Debug, Mode, Placement, apply_hud, handle_mode, paint, place_start, report_outcome,
-    apply_solids, setup_grid, sync_image, toggle_debug,
+    apply_solids, setup_grid, setup_solid_tile, sync_image, toggle_debug, watch_solid_tile,
 };
 use screen::position_screen_text;
 use tutorial::{
@@ -82,10 +82,12 @@ fn main() {
             Startup,
             (
                 setup_grid,
+                setup_solid_tile,
                 setup_levels,
                 setup_camera,
                 setup_tutorial,
                 setup_ball_texture,
+                setup_arrow_texture,
                 setup_victory_text,
                 setup_menu,
             )
@@ -103,6 +105,7 @@ fn main() {
                 apply_solids,
                 step_ball.run_if(in_run_mode),
                 manual_step.run_if(in_run_mode),
+                watch_solid_tile,
                 sync_image,
                 update_ball_transform,
                 update_ball_color,

@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 use crate::ball::{self, Ball, BallTextures, ChargeText, Outcome, Run, Tuning};
-use crate::grid::{CELL_PX, Cell, GRID_H, GRID_W, Grid};
+use crate::grid::{CELL_PX, CELL_TEX, Cell, GRID_H, GRID_W, Grid};
 
 /// Which half of the game is active.
 #[derive(Resource, PartialEq, Eq, Clone, Copy, Default, Debug)]
@@ -45,12 +45,36 @@ pub struct Debug(pub bool);
 #[derive(Component)]
 pub struct HudText;
 
+/// The metal tile drawn into solid cells, loaded from `solid_block.png`.
+#[derive(Resource)]
+pub struct SolidTile(pub Handle<Image>);
+
+/// Load the solid block texture once at startup.
+pub fn setup_solid_tile(mut commands: Commands, assets: Res<AssetServer>) {
+    commands.insert_resource(SolidTile(assets.load("sprites/solid_block.png")));
+}
+
+/// The solid tile loads asynchronously. Once it is available, re-bake the grid
+/// so any solids already drawn pick up the texture.
+pub fn watch_solid_tile(
+    tile: Res<SolidTile>,
+    images: Res<Assets<Image>>,
+    mut grid: ResMut<Grid>,
+    mut baked: Local<bool>,
+) {
+    let loaded = images.contains(&tile.0);
+    if loaded != *baked {
+        *baked = loaded;
+        grid.dirty = true;
+    }
+}
+
 /// Create the backing image, the sprite that displays it, and the `Grid`.
 pub fn setup_grid(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     let mut image = Image::new_fill(
         Extent3d {
-            width: GRID_W as u32,
-            height: GRID_H as u32,
+            width: (GRID_W * CELL_TEX) as u32,
+            height: (GRID_H * CELL_TEX) as u32,
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
@@ -239,10 +263,22 @@ fn leave_run(
 }
 
 /// Blit the array into the texture, but only when something changed.
-pub fn sync_image(mut grid: ResMut<Grid>, mut images: ResMut<Assets<Image>>) {
+pub fn sync_image(
+    mut grid: ResMut<Grid>,
+    tile: Res<SolidTile>,
+    mut images: ResMut<Assets<Image>>,
+) {
     if !grid.dirty {
         return;
     }
+    let tex = CELL_TEX as usize;
+    let stride = (grid.w as usize) * tex; // pixels per image row
+    // The metal tile, if it has finished loading. Cloned out so we can borrow
+    // the grid image mutably below.
+    let tile_px = images
+        .get(&tile.0)
+        .and_then(|img| img.data.clone())
+        .filter(|data| data.len() >= tex * tex * 4);
     let Some(mut image) = images.get_mut(&grid.image) else {
         return;
     };
@@ -250,33 +286,52 @@ pub fn sync_image(mut grid: ResMut<Grid>, mut images: ResMut<Assets<Image>>) {
         return;
     };
     // Guard against a stale/placeholder texture (e.g. a bad load).
-    if data.len() < (grid.w * grid.h * 4) as usize {
+    if data.len() < stride * (grid.h as usize) * tex * 4 {
         return;
     }
 
     let dissolve = grid.dissolve;
     let origin = grid.dissolve_origin;
     let radius = grid.dissolve_radius.max(1.0);
+    let mut row_buf = [0u8; (CELL_TEX * 4) as usize];
 
     for y in 0..grid.h {
+        // Image row 0 is the top, grid row 0 is the bottom.
+        let top = ((grid.h - 1 - y) as usize) * tex;
         for x in 0..grid.w {
             let cell = grid.cells[(y * grid.w + x) as usize];
-            // While the victory detonation runs, each cell burns to ash and
-            // then to nothing, with the wave spreading out from the ball.
-            let color = if dissolve > 0.0 {
+            let col = x as usize * tex;
+
+            // A `None` means "copy the metal tile"; otherwise fill the whole
+            // cell with a flat colour (surface, trail, empty, or burning ash).
+            let flat = if dissolve > 0.0 {
                 let dx = (x - origin.x) as f32;
                 let dy = (y - origin.y) as f32;
                 let distance = (dx * dx + dy * dy).sqrt();
                 let normalised = (distance / radius).clamp(0.0, 1.0);
                 let local = ((dissolve - normalised * 0.6) / 0.4).clamp(0.0, 1.0);
-                Grid::dissolve_color(cell, local)
+                Some(Grid::dissolve_color(cell, local))
+            } else if cell == Cell::Solid && tile_px.is_some() {
+                None
             } else {
-                Grid::color(cell)
+                Some(Grid::color(cell))
             };
-            // Image row 0 is the top, grid row 0 is the bottom.
-            let row = grid.h - 1 - y;
-            let offset = ((row * grid.w + x) as usize) * 4;
-            data[offset..offset + 4].copy_from_slice(&color);
+
+            if let Some(color) = flat {
+                for px in row_buf.chunks_exact_mut(4) {
+                    px.copy_from_slice(&color);
+                }
+                for ty in 0..tex {
+                    let dst = ((top + ty) * stride + col) * 4;
+                    data[dst..dst + tex * 4].copy_from_slice(&row_buf);
+                }
+            } else if let Some(tile) = &tile_px {
+                for ty in 0..tex {
+                    let src = ty * tex * 4;
+                    let dst = ((top + ty) * stride + col) * 4;
+                    data[dst..dst + tex * 4].copy_from_slice(&tile[src..src + tex * 4]);
+                }
+            }
         }
     }
     grid.dirty = false;

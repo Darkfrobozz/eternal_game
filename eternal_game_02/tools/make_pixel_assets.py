@@ -36,6 +36,12 @@ FRAME = (96, 102, 118, 255)
 GLASS = (228, 234, 247, 255)
 GLASS_HI = (255, 255, 255, 255)
 
+METAL_DARK = (58, 64, 78, 255)
+METAL_MID = (104, 112, 130, 255)
+METAL_LIGHT = (156, 166, 186, 255)
+METAL_HI = (204, 214, 232, 255)
+RIDGE_DARK = (40, 44, 56, 255)
+
 TAU = math.tau
 
 
@@ -224,6 +230,48 @@ def make_panel():
     return fb
 
 
+# --- solid block ----------------------------------------------------------
+
+def make_solid():
+    """A metallic solid block. A raised beam runs from the middle out to each
+    of the four corners, so neighbours meet corner-to-corner."""
+    W = H = 16
+    fb = FB(W, H)
+    cx, cy = (W - 1) / 2.0, (H - 1) / 2.0
+
+    # Base plate: bevel top-left light / bottom-right dark, with a brushed sheen
+    # and a soft diagonal falloff so it reads as rolled metal.
+    for y in range(H):
+        for x in range(W):
+            if x == 0 or y == 0:
+                c = METAL_LIGHT
+            elif x == W - 1 or y == H - 1:
+                c = METAL_DARK
+            else:
+                brush = ((x * 3 + y * 5) % 4) - 1        # dither -1..2
+                sheen = (x + y) - (W - 1)               # top-left brighter
+                base = 118 + brush * 6 - sheen * 2
+                base = max(64, min(152, base))
+                c = (base, base + 10, base + 28, 255)
+            fb.put(x, y, c)
+
+    # Raised X beam: centre to each corner. A bright crest with dark flanks
+    # gives it relief, and the corners line up with the neighbouring blocks.
+    for y in range(H):
+        for x in range(W):
+            for d in (abs(x - y), abs((x + y) - (W - 1))):
+                if d == 0:
+                    fb.put(x, y, METAL_HI)
+                elif d == 1:
+                    fb.put(x, y, RIDGE_DARK)
+
+    # Central hub over the crossing, with a bright rivet.
+    fb.disc(cx + 0.5, cy + 0.5, 3.6, OUTLINE)
+    fb.disc(cx + 0.5, cy + 0.5, 2.6, METAL_LIGHT)
+    fb.disc(cx + 0.5, cy + 0.5, 1.0, METAL_HI)
+    return fb
+
+
 # --- transform / tint / preview --------------------------------------------
 
 def rotate(fb, deg):
@@ -277,6 +325,25 @@ def assemble(shell, core, panel, angle, tint):
     return out
 
 
+def scale_up(fb, factor):
+    out = FB(fb.w * factor, fb.h * factor)
+    for y in range(fb.h):
+        for x in range(fb.w):
+            c = fb.px[y][x]
+            for dy in range(factor):
+                for dx in range(factor):
+                    out.px[y * factor + dy][x * factor + dx] = c
+    return out
+
+
+def tile_sheet(fb, cols, rows):
+    out = FB(fb.w * cols, fb.h * rows)
+    for r in range(rows):
+        for c in range(cols):
+            out.blit(fb, c * fb.w, r * fb.h)
+    return out
+
+
 def compose_preview(shell, core, panel, scale=4):
     charges = (0.0, 4.0, 16.0)
     pad = 6
@@ -317,10 +384,16 @@ def main():
     shell = make_shell()
     core = make_core()
     panel = make_panel()
+    solid = make_solid()
 
     write_png(os.path.join(out, "ball_shell.png"), shell.w, shell.h, shell.px)
     write_png(os.path.join(out, "ball_core.png"), core.w, core.h, core.px)
     write_png(os.path.join(out, "battery_panel.png"), panel.w, panel.h, panel.px)
+    write_png(os.path.join(out, "solid_block.png"), solid.w, solid.h, solid.px)
+
+    # A grid of blocks, so the corner pattern can be checked for continuity.
+    sheet = scale_up(tile_sheet(solid, 4, 3), 8)
+    write_png(os.path.join(out, "solid_preview.png"), sheet.w, sheet.h, sheet.px)
 
     preview = compose_preview(shell, core, panel)
     write_png(os.path.join(out, "preview.png"), len(preview[0]), len(preview), preview)
@@ -328,7 +401,9 @@ def main():
     ascii_preview(shell, "ball_shell.png")
     ascii_preview(core, "ball_core.png")
     ascii_preview(panel, "battery_panel.png")
-    print("\nWrote ball_shell.png, ball_core.png, battery_panel.png, preview.png")
+    ascii_preview(solid, "solid_block.png")
+    print("\nWrote ball_shell.png, ball_core.png, battery_panel.png,")
+    print("solid_block.png, solid_preview.png, preview.png")
 
 
 if __name__ == "__main__":
