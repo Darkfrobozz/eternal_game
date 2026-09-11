@@ -1,0 +1,6 @@
+[env]
+# WSLg's Wayland connection is flaky (sctk-adwaita portal timeouts + broken
+# pipe). winit 0.30 picks Wayland first whenever WAYLAND_DISPLAY is set, so we
+# blank it out here to fall back to WSLg's stable X11 path. `force` overrides
+# the value inherited from the shell.
+WAYLAND_DISPLAY = { value = "", force = true }

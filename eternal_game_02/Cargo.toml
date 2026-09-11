@@ -1,0 +1,16 @@
+[package]
+name = "eternal_game_02"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Only pull in what a 2D game needs (no 3D, UI or audio yet).
+bevy = { version = "0.19", default-features = false, features = ["2d"] }
+
+# Bevy is slow in debug builds; optimise our dependencies so the game runs
+# smoothly while keeping our own code fast to recompile.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
