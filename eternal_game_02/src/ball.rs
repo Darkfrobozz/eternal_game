@@ -286,16 +286,12 @@ pub(crate) fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
     ball.moved = true;
     run.visits.entry(next).or_insert(ball.charge);
 
-    // A 90-degree turn is the orthogonal encoding of a diagonal step. Add the
-    // +1 correction that makes the two orthogonal moves cost exactly what the
-    // diagonal would, and fill the skipped 2x2 corner as trail.
+    // A 90-degree turn is the orthogonal encoding of a diagonal step: add the
+    // +1 correction so the two orthogonal moves cost exactly what the diagonal
+    // would. Only cells the ball actually visits are marked as trail.
     if let Some(previous) = previous_dir
         && d.x * previous.x + d.y * previous.y == 0
     {
-        let skipped = from - previous + d;
-        if grid.is_track(skipped) {
-            grid.set(skipped, Cell::Trail);
-        }
         ball.charge += CHARGE_PER_CELL;
     }
 }
