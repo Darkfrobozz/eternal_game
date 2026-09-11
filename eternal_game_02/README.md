@@ -26,13 +26,27 @@ Cell values in the array: `0` empty, `1` solid (painted by the pen), `2` surface
 (auto-grown around solids), `3` trail (where the ball has been).
 
 - The pen draws `1`s. Every adjacent empty cell becomes a `2`.
-- The ball's route is a flood fill of the connected track from its start,
-  disallowing diagonal wall-cuts. The ball follows it clockwise, never
-  reversing, and lays `3`s behind it.
+- Movement is orthogonal only. The ball follows the 8-connected solid mass it
+  started on (its `component`) and uses a right-hand rule (right > straight >
+  left, never reversing).
+- A 90-degree turn is the orthogonal encoding of a diagonal: it marks the
+  skipped 2x2 corner as trail and adds a `+1` charge correction, so a staircase
+  costs exactly what the equivalent diagonal would.
 - Charge is measured in cells moved: moving *down* accumulates, moving up or
-  level consumes, starting from a fixed pool. Hitting zero ends the run.
+  level consumes. Charge hitting zero ends the run.
 - A run is won when the ball reaches a previously visited cell with at least
   the charge it had on the previous visit (a self-sustaining loop).
+
+## Debugging / replay
+
+- `Y` in-game saves the current drawing, ball placement and start charge to
+  `debug_config.txt`.
+- `L` loads it back.
+- `cargo run -- --replay [file] [steps]` runs it headlessly and prints the board
+  and the ball's exact path, step by step, so a reported bug can be reproduced.
+
+The config is plain text: `#` solid, `+` surface, `o` trail, `.` empty. Only the
+solids and the ball placement really matter; the surface is rebuilt on load.
 
 ## Potential ideas (parked)
 

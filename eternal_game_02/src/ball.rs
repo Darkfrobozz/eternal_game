@@ -165,8 +165,17 @@ pub fn step_ball(
     }
 }
 
-/// One tile of movement.
-fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
+/// Set up a fresh run on `grid` starting at `start`.
+pub fn start_run(run: &mut Run, grid: &Grid, start: IVec2, charge: f32) {
+    run.route = grid.reachable(start);
+    run.components = grid.solid_components();
+    run.visits.clear();
+    run.visits.insert(start, charge);
+    run.outcome = Outcome::Running;
+}
+
+/// One tile of movement. Public so the headless replay can drive it.
+pub(crate) fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
     let from = ball.cell;
     let behind = from - ball.dir;
 

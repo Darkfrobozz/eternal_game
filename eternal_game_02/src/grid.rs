@@ -134,6 +134,30 @@ impl Grid {
         }
     }
 
+    /// Regenerate the whole `2` surface from the `1` solids, discarding trail.
+    ///
+    /// The surface is derived data, so a config only really needs to store the
+    /// solids; this rebuilds everything else.
+    pub fn rebuild_surface(&mut self) {
+        for c in &mut self.cells {
+            if *c != Cell::Solid {
+                *c = Cell::Empty;
+            }
+        }
+        let solids: Vec<IVec2> = (0..self.h)
+            .flat_map(|y| (0..self.w).map(move |x| IVec2::new(x, y)))
+            .filter(|c| self.get(*c) == Some(Cell::Solid))
+            .collect();
+        for solid in solids {
+            for n in self.neighbors(solid).collect::<Vec<_>>() {
+                if self.get(n) == Some(Cell::Empty) {
+                    self.set(n, Cell::Surface);
+                }
+            }
+        }
+        self.dirty = true;
+    }
+
     /// Paint a straight line of cells with `value` (Bresenham), so fast drags
     /// don't leave gaps.
     pub fn paint_line(&mut self, a: IVec2, b: IVec2, value: Cell) {

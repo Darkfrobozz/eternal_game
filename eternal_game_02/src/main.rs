@@ -5,6 +5,7 @@
 //! flood-filled route clockwise while accumulating charge.
 
 mod ball;
+mod config;
 mod grid;
 mod paint;
 
@@ -17,6 +18,21 @@ use paint::{
 };
 
 fn main() {
+    // Headless: `cargo run -- --replay [file] [steps]`.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(pos) = args.iter().position(|a| a == "--replay") {
+        let path = args
+            .get(pos + 1)
+            .map(String::as_str)
+            .unwrap_or(config::CONFIG_PATH);
+        let steps = args
+            .get(pos + 2)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(120);
+        config::replay(path, steps);
+        return;
+    }
+
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
@@ -40,6 +56,7 @@ fn main() {
         .add_systems(
             Update,
             (
+                config::debug_io,
                 tune_start_charge,
                 place_start,
                 handle_mode,

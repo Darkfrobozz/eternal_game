@@ -61,7 +61,7 @@ pub fn setup_grid(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
 
     commands.spawn((
         Text2d::new(
-            "Space: pen / run   Left-drag: draw   Right-drag: erase   Middle-click: place ball   B: auto start   [ ]: start charge   C: clear",
+            "Space: pen / run   Left-drag: draw   Right-drag: erase   Middle-click: place ball   B: auto start   [ ]: start charge   Y/L: save/load   C: clear",
         ),
         TextFont {
             font_size: FontSize::Px(15.0),
@@ -168,9 +168,7 @@ pub fn handle_mode(
                 .or_else(|| grid.find_start());
             match chosen {
                 Some(start) => {
-                    run.route = grid.reachable(start);
-                    run.components = grid.solid_components();
-                    run.visits.insert(start, tuning.start_charge);
+                    ball::start_run(&mut run, &grid, start, tuning.start_charge);
                     ball::spawn_ball(&mut commands, &grid, start, tuning.start_charge);
                 }
                 None => info!("No surface to run on yet — draw something first."),
