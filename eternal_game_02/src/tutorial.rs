@@ -95,10 +95,10 @@ impl Tutorial {
             self.stepped,
             self.rolled,
             self.paused,
-            self.exited,
             self.zoomed,
             self.panned,
             self.looped,
+            self.exited,
         ]
     }
 
@@ -270,7 +270,7 @@ mod tests {
         });
         assert_eq!(
             tutorial.flags(),
-            [false, false, false, false, false, true, false, false]
+            [false, false, false, false, true, false, false, false]
         );
         assert!(!tutorial.complete());
 
@@ -281,8 +281,87 @@ mod tests {
         });
         assert_eq!(
             tutorial.flags(),
-            [false, false, false, false, false, true, false, true]
+            [false, false, false, false, true, false, true, false]
         );
+    }
+
+    #[test]
+    fn each_action_latches_its_own_objective() {
+        // (observed action, index in OBJECTIVES it should tick)
+        let cases: [(Observed, usize); 8] = [
+            (
+                Observed {
+                    drawn: true,
+                    ..default()
+                },
+                0,
+            ),
+            (
+                Observed {
+                    stepped: true,
+                    ..default()
+                },
+                1,
+            ),
+            (
+                Observed {
+                    rolled: true,
+                    ..default()
+                },
+                2,
+            ),
+            (
+                Observed {
+                    paused: true,
+                    ..default()
+                },
+                3,
+            ),
+            (
+                Observed {
+                    zoomed: true,
+                    ..default()
+                },
+                4,
+            ),
+            (
+                Observed {
+                    panned: true,
+                    ..default()
+                },
+                5,
+            ),
+            (
+                Observed {
+                    looped: true,
+                    ..default()
+                },
+                6,
+            ),
+            (
+                Observed {
+                    exited: true,
+                    ..default()
+                },
+                7,
+            ),
+        ];
+
+        for (observed, expected) in cases {
+            let mut tutorial = Tutorial {
+                active: true,
+                ..default()
+            };
+            tutorial.observe(observed);
+            for (i, done) in tutorial.flags().iter().enumerate() {
+                assert_eq!(
+                    *done,
+                    i == expected,
+                    "objective {i} ({}) latched by the wrong action",
+                    OBJECTIVES[i]
+                );
+            }
+        }
     }
 
     #[test]
