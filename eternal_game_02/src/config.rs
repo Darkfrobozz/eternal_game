@@ -167,7 +167,7 @@ pub fn parse(text: &str, image: Handle<Image>) -> Option<(Grid, Option<IVec2>, T
 /// be erased (only the player's own strokes can be).
 pub fn parse_level(text: &str, image: Handle<Image>) -> Option<(Grid, Option<IVec2>, Tuning)> {
     let (mut grid, place, tuning) = parse(text, image)?;
-    grid.lock_non_empty();
+    grid.lock_solids();
     Some((grid, place, tuning))
 }
 

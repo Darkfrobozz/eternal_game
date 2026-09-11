@@ -80,13 +80,14 @@ impl Grid {
         }
     }
 
-    /// Lock every non-empty cell (level geometry) so it cannot be edited.
-    pub fn lock_non_empty(&mut self) {
+    /// Lock the solid cells (the level's walls) so the eraser cannot remove
+    /// them. The derived surface is *not* locked.
+    pub fn lock_solids(&mut self) {
         self.locked.clear();
         for y in 0..self.h {
             for x in 0..self.w {
                 let cell = IVec2::new(x, y);
-                if self.get(cell) != Some(Cell::Empty) {
+                if self.get(cell) == Some(Cell::Solid) {
                     self.locked.insert(cell);
                 }
             }
@@ -209,7 +210,7 @@ impl Grid {
         }
     }
 
-    /// Wipe everything except locked level geometry.
+    /// Wipe everything except locked solids, then regrow their surface.
     pub fn clear(&mut self) {
         for y in 0..self.h {
             for x in 0..self.w {
@@ -219,7 +220,7 @@ impl Grid {
                 }
             }
         }
-        self.dirty = true;
+        self.rebuild_surface();
     }
 
     /// Turn every visited cell back into fresh surface.
@@ -384,16 +385,17 @@ mod tests {
     fn locked_cells_cannot_be_erased() {
         let mut grid = grid();
         grid.paint(IVec2::new(5, 5), Cell::Solid);
-        grid.lock_non_empty();
+        grid.lock_solids();
 
+        // Locked solid cannot be erased...
         grid.paint(IVec2::new(5, 5), Cell::Empty);
         assert_eq!(grid.get(IVec2::new(5, 5)), Some(Cell::Solid));
+        // ...but the derived surface is not locked and can be erased.
+        assert!(grid.is_track(IVec2::new(4, 5)));
+        grid.paint(IVec2::new(4, 5), Cell::Empty);
+        assert_eq!(grid.get(IVec2::new(4, 5)), Some(Cell::Empty));
 
-        // Pen still works, even on a locked surface cell.
-        grid.paint(IVec2::new(4, 5), Cell::Solid);
-        assert_eq!(grid.get(IVec2::new(4, 5)), Some(Cell::Solid));
-
-        // And on empty ground.
+        // The pen still works on empty ground.
         grid.paint(IVec2::new(10, 10), Cell::Solid);
         assert_eq!(grid.get(IVec2::new(10, 10)), Some(Cell::Solid));
     }
