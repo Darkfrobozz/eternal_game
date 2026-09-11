@@ -71,7 +71,7 @@ pub fn setup_grid(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
 
     commands.spawn((
         Text2d::new(
-            "Space: roll/stop   Tab: nudge/manual   E: leave run   Left-drag: draw   Right-drag: erase   Middle-click: place   B: auto start   [ ]: start charge\nN: step (manual)   M: auto/manual   PageDown: next level   scroll: zoom   WASD: pan   Y/L: save/load   C: clear",
+            "Space: roll/pause   Tab: nudge/manual   E: leave run   Left-drag: draw   Right-drag: erase   Middle-click: place   B: auto start   [ ]: start charge\nN: step (manual)   M: auto/manual   PageDown: next level   scroll: zoom   WASD: pan   Y/L: save/load   C: clear",
         ),
         TextFont {
             font_size: FontSize::Px(15.0),
@@ -154,9 +154,9 @@ pub fn place_start(
     }
 }
 
-/// `Space` starts the ball rolling and stops it again, `Tab` takes manual
-/// control (from pen mode it enters run mode paused; in run mode it nudges), and
-/// `E` leaves run mode from either state.
+/// `Space` starts the ball rolling and pauses/resumes it in place, `Tab` takes
+/// manual control (from pen mode it enters run mode paused; in run mode it
+/// nudges), and `E` leaves run mode from either state.
 pub fn handle_mode(
     keys: Res<ButtonInput<KeyCode>>,
     mut commands: Commands,
@@ -208,15 +208,9 @@ pub fn handle_mode(
             if tab {
                 // Take manual control; `manual_step` performs the nudge.
                 tuning.manual = true;
-            }
-            if space {
-                if tuning.manual {
-                    // Resume automatic rolling from a paused, manual run.
-                    tuning.manual = false;
-                } else {
-                    // Stop and return to the pen.
-                    leave_run(&mut commands, &mut mode, &mut grid, &balls);
-                }
+            } else if space {
+                // Play/pause in place — the ball stays on the board.
+                tuning.manual = !tuning.manual;
             }
         }
     }
