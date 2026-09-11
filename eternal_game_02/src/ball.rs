@@ -286,13 +286,22 @@ pub(crate) fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
     ball.moved = true;
     run.visits.entry(next).or_insert(ball.charge);
 
-    // A 90-degree turn is the orthogonal encoding of a diagonal step: add the
-    // +1 correction so the two orthogonal moves cost exactly what the diagonal
-    // would. Only cells the ball actually visits are marked as trail.
+    // A 90-degree turn encodes a diagonal step. Charge it with the diagonal's
+    // sign: descending accumulates, ascending consumes. Only cells the ball
+    // actually visits are marked as trail.
     if let Some(previous) = previous_dir
         && d.x * previous.x + d.y * previous.y == 0
     {
-        ball.charge += CHARGE_PER_CELL;
+        if d.y + previous.y < 0 {
+            ball.charge += CHARGE_PER_CELL;
+        } else {
+            ball.charge -= CHARGE_PER_CELL;
+        }
+        if ball.charge < 0.0 {
+            ball.charge = 0.0;
+            run.outcome = Outcome::Stuck;
+            info!("Ball ran out of charge at {:?}", ball.cell);
+        }
     }
 }
 
@@ -446,10 +455,10 @@ mod tests {
         assert_eq!(ball.dir, IVec2::X); // still facing forward
     }
 
-    /// A 90-degree turn encodes a diagonal: its two orthogonal steps cost
-    /// exactly what the diagonal would (here up-right = -1).
+    /// An ascending turn (right + up) is a "bad diagonal": the up step and the
+    /// turn each consume, so the turn step costs 2.
     #[test]
-    fn turn_combo_matches_a_diagonal() {
+    fn ascending_turn_consumes() {
         let mut grid = grid();
         grid.set(IVec2::new(5, 5), Cell::Solid);
         grid.set(IVec2::new(4, 5), Cell::Surface);
@@ -463,10 +472,10 @@ mod tests {
         let mut ball = Ball::new(IVec2::new(4, 5), TEST_CHARGE);
         ball.dir = IVec2::new(0, 1);
 
-        step_once(&mut grid, &mut run, &mut ball);
-        step_once(&mut grid, &mut run, &mut ball);
-        assert_eq!(ball.cell, IVec2::new(5, 6));
-        assert_eq!(ball.charge, TEST_CHARGE - 1.0);
+        step_once(&mut grid, &mut run, &mut ball); // up: -1
+        let after_up = ball.charge;
+        step_once(&mut grid, &mut run, &mut ball); // right turn: -1 step, -1 combo
+        assert_eq!(ball.charge, after_up - 2.0);
     }
 
     /// With no orthogonal move available the ball stops and never reverses.
