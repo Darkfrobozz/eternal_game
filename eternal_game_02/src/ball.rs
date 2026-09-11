@@ -325,15 +325,17 @@ mod tests {
         grid.find_start().unwrap()
     }
 
-    /// The ball must only ever step between cells that share a solid, so it
-    /// follows one contour and never hops to a parallel one.
+    /// The ball must always hug the same connected solid mass and never hop to
+    /// a parallel contour.
     #[test]
     fn painted_disk_contour_does_not_hop() {
         let mut grid = grid();
         let start = disk(&mut grid, 12.0);
+        let labels = grid.solid_components();
+        let component = *labels.values().next().unwrap();
         let mut run = Run::default();
         run.route = grid.reachable(start);
-        run.components = grid.solid_components();
+        run.components = labels;
         run.visits.insert(start, TEST_CHARGE);
         let mut ball = Ball::new(start, TEST_CHARGE);
         let mut visited = HashSet::new();
@@ -342,14 +344,15 @@ mod tests {
             if run.outcome != Outcome::Running {
                 break;
             }
-            let from = ball.cell;
             step_once(&mut grid, &mut run, &mut ball);
             if run.outcome != Outcome::Running {
                 break;
             }
             assert!(
-                grid.shares_solid(from, ball.cell),
-                "hopped from {from:?} to {:?}",
+                NEIGHBORS8
+                    .iter()
+                    .any(|d| run.components.get(&(ball.cell + *d)) == Some(&component)),
+                "ball left the disk contour at {:?}",
                 ball.cell
             );
             visited.insert(ball.cell);
@@ -412,10 +415,10 @@ mod tests {
         assert_eq!(ball.dir, IVec2::X); // still facing forward
     }
 
-    /// A diagonal that would cut a solid/void/trail corner is blocked; the
-    /// ball has to staircase around it instead.
+    /// A diagonal is taken when an orthogonal path exists through a surface
+    /// corner — even if the other corner is solid.
     #[test]
-    fn diagonal_around_solid_is_blocked() {
+    fn diagonal_with_a_path_is_taken() {
         let mut grid = grid();
         grid.set(IVec2::new(0, 1), Cell::Solid);
         grid.set(IVec2::new(0, 0), Cell::Surface);
@@ -430,16 +433,19 @@ mod tests {
         ball.dir = IVec2::new(0, 1);
 
         step_once(&mut grid, &mut run, &mut ball);
-        assert_eq!(ball.cell, IVec2::new(1, 0), "must go around, not cut the corner");
+        assert_eq!(ball.cell, IVec2::new(1, 1), "should take the diagonal");
+        assert_eq!(grid.get(IVec2::new(1, 0)), Some(Cell::Trail));
+        // Climbing diagonal (spend 1) plus the consumed fill (spend 1).
+        assert_eq!(ball.charge, TEST_CHARGE - 2.0);
     }
 
-    /// A blocked diagonal does not fill or charge anything.
+    /// With no surface corner there is no orthogonal path, so the diagonal is
+    /// blocked.
     #[test]
-    fn blocked_diagonal_does_not_fill() {
+    fn diagonal_without_a_path_is_blocked() {
         let mut grid = grid();
         grid.set(IVec2::new(10, 10), Cell::Solid);
         grid.set(IVec2::new(10, 11), Cell::Surface);
-        grid.set(IVec2::new(11, 11), Cell::Surface);
         grid.set(IVec2::new(11, 10), Cell::Surface);
 
         let mut run = Run::default();
@@ -450,15 +456,13 @@ mod tests {
         ball.dir = IVec2::new(0, 1);
 
         step_once(&mut grid, &mut run, &mut ball);
-        assert_eq!(ball.cell, IVec2::new(11, 11));
-        assert_eq!(grid.get(IVec2::new(11, 10)), Some(Cell::Surface));
-        assert_eq!(ball.charge, TEST_CHARGE - 1.0);
+        assert_eq!(run.outcome, Outcome::Stuck);
     }
 
-    /// A drawn diagonal is now walked as a staircase: corner-cutting diagonals
-    /// are blocked, so every step is orthogonal.
+    /// A drawn diagonal is walked with diagonal steps again, now that a single
+    /// surface corner is enough to permit them.
     #[test]
-    fn diagonal_stroke_is_walked_orthogonally() {
+    fn diagonal_stroke_prefers_diagonal_steps() {
         let mut grid = grid();
         for i in 0..20 {
             grid.paint(IVec2::new(10 + i, 10 + i), Cell::Solid);
@@ -487,8 +491,10 @@ mod tests {
                 orthogonal += 1;
             }
         }
-        assert_eq!(diagonal, 0, "no diagonal moves expected");
-        assert!(orthogonal > 0, "ball should still move");
+        assert!(
+            diagonal > orthogonal,
+            "expected mostly diagonal moves, got diagonal={diagonal} orthogonal={orthogonal}"
+        );
     }
 }
 

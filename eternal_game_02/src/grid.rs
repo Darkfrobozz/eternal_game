@@ -101,21 +101,17 @@ impl Grid {
         matches!(self.get(cell), Some(Cell::Surface) | Some(Cell::Trail))
     }
 
-    /// A corner cell only fails to block a diagonal step if it is a valid `2`
-    /// path cell. Solids, the grid edge, the empty void, and cells the ball has
-    /// already walked all block.
-    fn blocks_diagonal(&self, cell: IVec2) -> bool {
-        self.get(cell) != Some(Cell::Surface)
-    }
-
-    /// True when a *diagonal* step is blocked by either orthogonal corner.
-    /// Straight steps are never blocked.
+    /// A diagonal step is possible only when at least one of its two orthogonal
+    /// corner cells is a real surface (`2`) cell — i.e. an orthogonal path to
+    /// the same spot exists. Solids, trails, and the void provide no such path,
+    /// so a diagonal that would cut a corner or leap a gap is blocked.
     pub fn step_blocked(&self, from: IVec2, dir: IVec2) -> bool {
         if dir.x == 0 || dir.y == 0 {
             return false;
         }
-        self.blocks_diagonal(from + IVec2::new(dir.x, 0))
-            || self.blocks_diagonal(from + IVec2::new(0, dir.y))
+        let a = self.get(from + IVec2::new(dir.x, 0));
+        let b = self.get(from + IVec2::new(0, dir.y));
+        a != Some(Cell::Surface) && b != Some(Cell::Surface)
     }
 
     /// Solid cells adjacent to both `a` and `b` — the contour(s) they share.
