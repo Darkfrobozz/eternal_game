@@ -71,6 +71,12 @@ pub struct Grid {
     pub solids: HashSet<IVec2>,
     /// Set when `solids` changes, so the surface can be regenerated.
     pub solids_dirty: bool,
+    /// Victory dissolve progress: `0.0` intact, `1.0` fully ashed and gone.
+    pub dissolve: f32,
+    /// The cell the dissolve wave spreads out from (the ball).
+    pub dissolve_origin: IVec2,
+    /// How far, in cells, the dissolve wave reaches, used to normalise it.
+    pub dissolve_radius: f32,
 }
 
 impl Grid {
@@ -84,6 +90,9 @@ impl Grid {
             locked: HashSet::new(),
             solids: HashSet::new(),
             solids_dirty: false,
+            dissolve: 0.0,
+            dissolve_origin: IVec2::ZERO,
+            dissolve_radius: 1.0,
         }
     }
 
@@ -272,6 +281,34 @@ impl Grid {
         self.dirty = true;
     }
 
+    /// Wipe the whole board — solids, surface, trail and the level lock. Used
+    /// when the victory detonation consumes the level.
+    pub fn obliterate(&mut self) {
+        self.solids.clear();
+        self.locked.clear();
+        self.cells.iter_mut().for_each(|c| *c = Cell::Empty);
+        self.dissolve = 0.0;
+        self.dirty = true;
+    }
+
+    /// Bounding box of every non-empty cell, or `None` if the board is blank.
+    /// Doubles as the level's extent for the victory blast.
+    pub fn content_bounds(&self) -> Option<(IVec2, IVec2)> {
+        let mut min = IVec2::new(self.w, self.h);
+        let mut max = IVec2::new(-1, -1);
+        for y in 0..self.h {
+            for x in 0..self.w {
+                if self.get(IVec2::new(x, y)) != Some(Cell::Empty) {
+                    min.x = min.x.min(x);
+                    min.y = min.y.min(y);
+                    max.x = max.x.max(x);
+                    max.y = max.y.max(y);
+                }
+            }
+        }
+        (max.x >= 0).then_some((min, max))
+    }
+
     /// Flood fill the orthogonal track reachable from `start`. This is the
     /// ball's route.
     pub fn reachable(&self, start: IVec2) -> HashSet<IVec2> {
@@ -375,11 +412,39 @@ impl Grid {
         }
     }
 
+    /// A cell's colour while the victory dissolve passes over it. `progress`
+    /// runs from `0.0` (intact) to `1.0` (burnt away): first to warm ash, then
+    /// to the background, so the level visibly crumbles rather than blinking
+    /// out.
+    pub fn dissolve_color(cell: Cell, progress: f32) -> [u8; 4] {
+        // Empty cells are just background; only the level burns.
+        if progress <= 0.0 || cell == Cell::Empty {
+            return Self::color(cell);
+        }
+        let ash = [72, 66, 60, 255];
+        let gone = Self::color(Cell::Empty);
+        if progress < 0.5 {
+            lerp_rgba(Self::color(cell), ash, progress * 2.0)
+        } else {
+            lerp_rgba(ash, gone, (progress - 0.5) * 2.0)
+        }
+    }
+
     /// Number of cells currently holding `value` (tests / win checks).
     #[cfg(test)]
     pub fn count(&self, value: Cell) -> usize {
         self.cells.iter().filter(|c| **c == value).count()
     }
+}
+
+/// Linear blend between two RGBA byte colours.
+fn lerp_rgba(a: [u8; 4], b: [u8; 4], t: f32) -> [u8; 4] {
+    let t = t.clamp(0.0, 1.0);
+    let mut out = [0u8; 4];
+    for i in 0..4 {
+        out[i] = (a[i] as f32 + (b[i] as f32 - a[i] as f32) * t).round() as u8;
+    }
+    out
 }
 
 #[cfg(test)]
@@ -417,6 +482,50 @@ mod tests {
         assert_eq!((ys.clone().min(), ys.max()), (Some(58), Some(61)));
         // Surface was regenerated around the new position.
         assert!(grid.count(Cell::Surface) > 0);
+    }
+
+    /// The victory dissolve burns a cell from its colour to ash, then away.
+    #[test]
+    fn dissolve_color_burns_to_ash_then_gone() {
+        let base = Grid::color(Cell::Solid);
+        assert_eq!(Grid::dissolve_color(Cell::Solid, 0.0), base);
+        // The empty background never ashes over.
+        assert_eq!(Grid::dissolve_color(Cell::Empty, 0.5), Grid::color(Cell::Empty));
+
+        let ash = Grid::dissolve_color(Cell::Solid, 0.5);
+        assert_ne!(ash, base);
+        // Ash is darker than the pale solid.
+        assert!(ash[0] < base[0] && ash[1] < base[1] && ash[2] < base[2]);
+
+        // Burnt all the way down to the background.
+        assert_eq!(Grid::dissolve_color(Cell::Solid, 1.0), Grid::color(Cell::Empty));
+    }
+
+    /// The detonation wipes the whole board — solids, surface, trail and lock.
+    #[test]
+    fn obliterate_clears_everything() {
+        let mut grid = grid();
+        paint(&mut grid, IVec2::new(5, 5), Cell::Solid);
+        grid.lock_solids();
+        assert!(grid.count(Cell::Solid) > 0);
+
+        grid.obliterate();
+
+        assert_eq!(grid.count(Cell::Empty), (GRID_W * GRID_H) as usize);
+        assert!(grid.solids.is_empty());
+        assert!(grid.locked.is_empty());
+        assert!(grid.dirty);
+    }
+
+    /// The content bounds cover the drawn shape plus its grown surface.
+    #[test]
+    fn content_bounds_covers_the_drawn_cells() {
+        let mut grid = grid();
+        paint(&mut grid, IVec2::new(5, 5), Cell::Solid);
+        paint(&mut grid, IVec2::new(8, 9), Cell::Solid);
+        let (min, max) = grid.content_bounds().expect("non-empty");
+        assert_eq!(min, IVec2::new(4, 4));
+        assert_eq!(max, IVec2::new(9, 10));
     }
 
     #[test]

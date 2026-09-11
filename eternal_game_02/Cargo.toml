@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-# Only pull in what a 2D game needs (no 3D, UI or audio yet).
-bevy = { version = "0.19", default-features = false, features = ["2d"] }
+# Only pull in what a 2D game needs (no 3D, UI or audio yet). `png` lets the
+# asset server load the sprites in assets/sprites/.
+bevy = { version = "0.19", default-features = false, features = ["2d", "png"] }
 
 # Bevy is slow in debug builds; optimise our dependencies so the game runs
 # smoothly while keeping our own code fast to recompile.

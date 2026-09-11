@@ -5,7 +5,7 @@ use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
-use crate::ball::{self, Ball, ChargeText, Outcome, Run, Tuning};
+use crate::ball::{self, Ball, BallTextures, ChargeText, Outcome, Run, Tuning};
 use crate::grid::{CELL_PX, Cell, GRID_H, GRID_W, Grid};
 
 /// Which half of the game is active.
@@ -157,9 +157,11 @@ pub fn place_start(
 /// `Space` starts the ball rolling and pauses/resumes it in place, `Tab` takes
 /// manual control (from pen mode it enters run mode paused; in run mode it
 /// nudges), and `E` leaves run mode from either state.
+#[allow(clippy::too_many_arguments)]
 pub fn handle_mode(
     keys: Res<ButtonInput<KeyCode>>,
     mut commands: Commands,
+    ball_textures: Res<BallTextures>,
     mut mode: ResMut<Mode>,
     mut grid: ResMut<Grid>,
     mut run: ResMut<Run>,
@@ -195,7 +197,13 @@ pub fn handle_mode(
             match chosen {
                 Some(start) => {
                     ball::start_run(&mut run, &grid, start, tuning.start_charge);
-                    ball::spawn_ball(&mut commands, &grid, start, tuning.start_charge);
+                    ball::spawn_ball(
+                        &mut commands,
+                        &grid,
+                        &ball_textures,
+                        start,
+                        tuning.start_charge,
+                    );
                 }
                 None => info!("No surface to run on yet — draw something first."),
             }
@@ -246,13 +254,29 @@ pub fn sync_image(mut grid: ResMut<Grid>, mut images: ResMut<Assets<Image>>) {
         return;
     }
 
+    let dissolve = grid.dissolve;
+    let origin = grid.dissolve_origin;
+    let radius = grid.dissolve_radius.max(1.0);
+
     for y in 0..grid.h {
         for x in 0..grid.w {
             let cell = grid.cells[(y * grid.w + x) as usize];
+            // While the victory detonation runs, each cell burns to ash and
+            // then to nothing, with the wave spreading out from the ball.
+            let color = if dissolve > 0.0 {
+                let dx = (x - origin.x) as f32;
+                let dy = (y - origin.y) as f32;
+                let distance = (dx * dx + dy * dy).sqrt();
+                let normalised = (distance / radius).clamp(0.0, 1.0);
+                let local = ((dissolve - normalised * 0.6) / 0.4).clamp(0.0, 1.0);
+                Grid::dissolve_color(cell, local)
+            } else {
+                Grid::color(cell)
+            };
             // Image row 0 is the top, grid row 0 is the bottom.
             let row = grid.h - 1 - y;
             let offset = ((row * grid.w + x) as usize) * 4;
-            data[offset..offset + 4].copy_from_slice(&Grid::color(cell));
+            data[offset..offset + 4].copy_from_slice(&color);
         }
     }
     grid.dirty = false;
@@ -300,8 +324,15 @@ pub fn paint(
     brush.last = Some(cell);
 }
 
-/// Once a run has finished, log it just once (placeholder for level UI).
-pub fn report_outcome(run: Res<Run>, mut reported: Local<bool>) {
+/// Once a run is solved, or has finished, log it just once (placeholder for
+/// level UI).
+pub fn report_outcome(run: Res<Run>, mut reported: Local<bool>, mut solved: Local<bool>) {
+    if !run.solved {
+        *solved = false;
+    } else if !*solved {
+        *solved = true;
+        info!("Run solved — looping eternally from here");
+    }
     if run.outcome == Outcome::Running {
         *reported = false;
     } else if !*reported {

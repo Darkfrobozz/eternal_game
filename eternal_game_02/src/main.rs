@@ -6,6 +6,7 @@
 
 mod ball;
 mod config;
+mod explosion;
 mod grid;
 mod menu;
 mod paint;
@@ -16,11 +17,15 @@ use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;
 
 use ball::{
-    Run, Tuning, draw_itinerary, manual_step, step_ball, tune_start_charge, update_ball_color,
-    update_ball_transform, update_charge_text,
+    Run, Tuning, draw_itinerary, manual_step, setup_ball_texture, step_ball, tune_start_charge,
+    update_ball_color, update_ball_transform, update_charge_text,
 };
 use grid::{CELL_PX, GRID_H, GRID_W};
-use config::{Levels, Progress, cycle_level, setup_levels, update_level_text};
+use config::{Levels, Progress, advance_detonation, cycle_level, setup_levels, update_level_text};
+use explosion::{
+    Detonation, setup_victory_text, show_victory, spawn_explosion, update_detonation,
+    update_explosion, update_pending_bursts,
+};
 use menu::{Menu, Screen, draw_menu, menu_input, setup_menu};
 use paint::{
     Brush, Debug, Mode, Placement, apply_hud, handle_mode, paint, place_start, report_outcome,
@@ -72,6 +77,7 @@ fn main() {
         .init_resource::<Tutorial>()
         .init_resource::<Menu>()
         .init_resource::<Screen>()
+        .init_resource::<Detonation>()
         .add_systems(
             Startup,
             (
@@ -79,6 +85,8 @@ fn main() {
                 setup_levels,
                 setup_camera,
                 setup_tutorial,
+                setup_ball_texture,
+                setup_victory_text,
                 setup_menu,
             )
                 .chain(),
@@ -107,6 +115,22 @@ fn main() {
                 camera_controls.run_if(in_play),
             )
                 .chain(),
+        )
+        // The death burst reads the outcome the stepping systems just wrote,
+        // so it runs after them (and its particles fade every frame).
+        .add_systems(
+            Update,
+            (
+                spawn_explosion,
+                update_detonation,
+                advance_detonation,
+                show_victory,
+                update_explosion,
+                update_pending_bursts,
+            )
+                .chain()
+                .after(step_ball)
+                .after(manual_step),
         )
         // Screen-space labels and the tutorial read input and react to the
         // camera, so they run after it has been moved this frame.

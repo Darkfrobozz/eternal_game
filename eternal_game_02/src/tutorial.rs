@@ -24,7 +24,7 @@ use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
 
-use crate::ball::{Outcome, Run, Tuning};
+use crate::ball::{Run, Tuning};
 use crate::grid::Grid;
 use crate::paint::Mode;
 use crate::screen::{ScreenAnchor, ScreenText};
@@ -200,7 +200,7 @@ pub fn track_tutorial(
         exited: keys.just_pressed(KeyCode::KeyE) && was_running,
         zoomed: scrolled,
         panned,
-        looped: run.outcome == Outcome::Won,
+        looped: run.solved,
     });
 }
 

@@ -37,14 +37,33 @@ Cell values in the array: `0` empty, `1` solid (painted by the pen), `2` surface
   8-connected solid component it started on and uses a right-hand rule
   (right > straight > left, never reversing). `Grid::reachable` is a
   4-connected flood fill of the route; a step must stay on the same component.
+  When any alternative exists, a move into a one-cell **dead end** is avoided,
+  so a loop does not peel off down a start-up spur and die there.
 - **Charge, per move:**
   - vertical: down `+1`, up `-1`;
   - horizontal: takes the **preceding vertical's** sign if it directly follows a
     vertical (the **combo**: `d+r`/`d+l` `+1`, `u+r`/`u+l` `-1`), otherwise `-1`
     (flat ground costs).
-  - Charge clamps at 0; hitting 0 ends the run (`Stuck`).
-- **Win:** the ball re-enters a cell it *actually* visited (`Run.visits`) with
-  charge ≥ the charge recorded there on first arrival.
+  - A move the battery cannot pay for ends the run as `Depleted` *before* the
+    ball moves: it bursts into a flash and sparks (see `src/explosion.rs`). An
+    empty battery can still roll downhill, since that gains charge.
+- **Winning: the loop keeps going — then overloads.** The first cell the ball
+  *actually* visits twice (`Run.visits`) is its loop closure. Returning there
+  with charge ≥ the charge recorded on first arrival sets `Run.solved` and
+  counts a lap; every lap multiplies `Run.speed`, so an eternal loop visibly
+  accelerates (capped at [`MAX_SPEED`](src/ball.rs)). A closure that misses the
+  guarantee no longer stops the ball as `Stuck` — it is doomed but runs on
+  until the battery empties and it explodes. Once a solved loop completes
+  [`VICTORY_LAPS`](src/ball.rs) (8) laps it overloads as `Outcome::Victory`.
+  The ball then detonates the **whole level**: a shockwave sized to the level's
+  bounds, a chain reaction over every cell it occupies, and a dissolve that
+  burns the level to ash and then wipes the grid completely clean. When the
+  blast finishes the next game level loads automatically; if there is none, a
+  **VICTORY** banner appears.
+- **Anything that stops the ball explodes.** `Depleted` (empty battery),
+  `Stuck` (no track ahead / no solid to follow) and `Victory` all despawn the
+  ball. The first two leave a single burst; victory leaves a level-wide blast
+  that consumes the level and clears the whole grid.
 - **Start:** `find_start` (topmost surface cell) or a placed start
   (`Placement.start`). The initial heading is derived from the solid anchor so
   the ball always sets off clockwise.
@@ -77,8 +96,15 @@ state; `PageDown` loads the next game level; left-drag draws solids,
 right-drag erases, `C` clears. Run mode is either automatic (`Space`) or
 manual (`Tab`). The charge readout and
 controller hint are hidden; the player infers charge from the arrows (green
-accumulates, orange consumes) and the ball's battery colour (grey depleted,
-hue shifting as it charges).
+accumulates, orange consumes) and the ball's battery colour, which sweeps from
+red when the battery is empty through orange and yellow to green as it charges.
+The ball rolls — one full turn per cell — smoothly sliding from cell to cell and
+nestling against the surface it hugs.
+When the battery is empty and the ball asks for a move it cannot afford, the
+ball explodes instead of taking the step; a dead end ends the same way. Once a
+loop is solved the ball keeps looping and speeds up a little every lap, and
+after a handful of laps the overload detonates the level, wipes the grid and
+loads the next level (or shows VICTORY when it was the last).
 
 `H` toggles **debug / map-editor mode**, which shows the HUD and enables:
 
@@ -109,10 +135,10 @@ cells if you want it in the middle.
   Handoff).
 - `levels/02.txt` — a descending spiral that closes net-positive and wins.
 - `levels/00_tutorial.txt` — a hollow box with one block missing from the top
-  wall. The ball starts inside and falls out through the gap (`Stuck`), until
-  the player draws the missing block, after which it completes a net-zero lap
-  and wins. A file whose name contains `tutorial` (case-insensitive) switches
-  on the guided control tutorial.
+  wall. The ball starts inside and falls out through the gap (running out of
+  charge, so it explodes), until the player draws the missing block, after
+  which it completes a net-zero lap and wins. A file whose name contains
+  `tutorial` (case-insensitive) switches on the guided control tutorial.
 
 ## Tutorial
 
@@ -126,11 +152,11 @@ eight-item checklist:
 4. `Space` again to pause,
 5. the scroll wheel to zoom,
 6. `W`/`A`/`S`/`D` to pan,
-7. make the ball loop forever (a `Won` run),
+7. make the ball loop forever (sets `Run.solved`),
 8. `E` to leave run mode.
 
 Drawing is detected as any solid the level did not lock, and looping as
-`run.outcome == Outcome::Won`. The checklist is not a strict sequence: each
+`run.solved`. The checklist is not a strict sequence: each
 item latches the moment it happens, so the goals can be ticked in any order.
 The prompt is a `Text2d` pinned to the top-left with `ScreenText`, so it
 stays readable while the player is zooming and panning. Loading any other
@@ -186,8 +212,11 @@ old full-grid files (no `origin`).
 - `src/tutorial.rs` — the three-step control tutorial.
 - `src/grid.rs` — `Grid` (cells, `solids`, `locked`, image), painting, surface
   regeneration, reachability, coordinate helpers, solid components.
-- `src/ball.rs` — `Ball`, `Run`, `Tuning`, movement + charge, arrows, battery
-  colour, HUD text.
+- `src/ball.rs` — `Ball`, `Run`, `Tuning`, movement + charge, loop/speed,
+  arrows, battery colour, HUD text.
+- `src/explosion.rs` — death bursts (`Depleted`/`Stuck`), the victory
+  detonation (`Detonation` state, ash dissolve, chain reaction) and the final
+  **VICTORY** banner.
 - `src/paint.rs` — `Mode`, `Brush`, `Placement`, `Debug`, mouse painting, mode
   switching, HUD visibility.
 - `src/config.rs` — save/load/`parse`/`serialize`, `Levels`, headless replay.
@@ -210,11 +239,17 @@ old full-grid files (no `origin`).
 
 ### Known issues / open questions
 
+- **Ball animation is forward-roll only.** Each move interpolates the sprite
+  straight from `Ball.prev` to `Ball.cell` and rolls one full signed turn around
+  the surface normal, which reads well on flat surface runs. The planned extra
+  cases — a **drop** (the surface ends into empty space) and a **wall** (the
+  ball hits a wall and must change direction, which wants a squash/anticipation
+  beat) — are not distinguished yet; they currently use the same straight roll.
+
 - **The win check is weak when `start_charge` is 0.** A completing loop returns
-  with `≥ 0` because charge clamps at 0 and a drain ends the run, so *any* loop
-  that completes currently wins. A net-zero loop should probably be a draw, not
-  a win. Consider comparing to the charge at the **start of the lap**, or
-  requiring `>` rather than `≥`.
+  with `≥ 0`, so *any* loop that completes is marked solved. A net-zero loop
+  should probably be a draw, not a win. Consider comparing to the charge at the
+  **start of the lap**, or requiring `>` rather than `≥`.
 - **`levels/01.txt` is impossible.** Its loop has 27 consuming steps and 26
   gaining steps → net `-1` per lap, so it always returns one short. It is a good
   test case. Likely fix: make a flat that follows a flat inherit the last

@@ -11,6 +11,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use bevy::image::{ImageLoaderSettings, ImageSampler};
 use bevy::prelude::*;
 
 use crate::grid::{CELL_PX, Cell, GRID_H, Grid, NEIGHBORS4, NEIGHBORS8};
@@ -19,6 +20,40 @@ use crate::grid::{CELL_PX, Cell, GRID_H, Grid, NEIGHBORS4, NEIGHBORS8};
 pub const STEPS_PER_SECOND: f32 = 6.0;
 /// Charge gained or spent per cell moved.
 pub const CHARGE_PER_CELL: f32 = 1.0;
+/// Each completed lap speeds the ball up by this factor, up to [`MAX_SPEED`],
+/// so a self-sustaining loop visibly accelerates forever.
+pub const SPEEDUP_PER_LAP: f32 = 1.35;
+/// Cap on [`Run::speed`], so an eternal loop stays playable.
+pub const MAX_SPEED: f32 = 25.0;
+/// How far the shell turns per cell, as a fraction of a full turn. The shell's
+/// angular speed is this times the step rate, so it automatically speeds up as
+/// the ball accelerates; this base is kept low so the default speed is calm.
+pub const SHELL_ROLL_PER_CELL: f32 = 0.15;
+/// Maximum turn of the inner core toward the surface normal per cell moved, in
+/// degrees. At 90 degrees a right-angle corner settles in about three cells.
+pub const CORE_ALIGN_PER_CELL_DEG: f32 = 30.0;
+/// The same limit in radians.
+const CORE_ALIGN_PER_CELL: f32 = CORE_ALIGN_PER_CELL_DEG * std::f32::consts::PI / 180.0;
+/// The ball's radius in world units. Kept just under half a cell, so it
+/// nestles against the solid it hugs while still reading as a ball.
+pub const BALL_RADIUS: f32 = CELL_PX * 0.44;
+/// On-screen diameter of the ball, in world units. The three square textures
+/// are [`BALL_TEX_PX`]px and map onto this.
+pub const BALL_DIAMETER: f32 = BALL_RADIUS * 2.0;
+/// Edge length of the square ball textures, in pixels.
+const BALL_TEX_PX: f32 = 80.0;
+/// Horizontal spacing between the three battery bays, in texture pixels.
+const BAY_DX_PX: f32 = 14.0;
+/// A battery's centre height above the ball centre, in texture pixels.
+const BATT_Y_PX: f32 = 16.0;
+/// A battery's size in texture pixels (width, height).
+const BATT_PX: Vec2 = Vec2::new(12.0, 14.0);
+/// Completed laps a solved loop survives before it overloads and takes the
+/// whole level with it — the victory.
+pub const VICTORY_LAPS: u32 = 8;
+/// Longest arrow history kept, so a run that loops forever does not grow
+/// without bound. Older moves fall off the back.
+const MAX_ITINERARY: usize = 1024;
 
 /// Tunable run parameters. Defaults are for the real game; tests and manual
 /// experiments can raise [`Tuning::start_charge`].
@@ -52,6 +87,19 @@ pub struct Ball {
     /// Whether the ball has made a real move yet (so the first heading isn't
     /// mistaken for a previous direction when detecting turn combos).
     moved: bool,
+    /// The cell the current move started from, so the sprite can be smoothly
+    /// interpolated from there to [`Ball::cell`].
+    prev: IVec2,
+    /// Roll angle at the start of the current move, in radians.
+    spin: f32,
+    /// Roll added over the current move (a fraction of a turn, see
+    /// [`SHELL_ROLL_PER_CELL`]).
+    spin_delta: f32,
+    /// Core angle at the start of the current move, in radians.
+    core_angle: f32,
+    /// How far the core turns over the current move: a small step toward the
+    /// surface normal, so it eases over many cells.
+    core_delta: f32,
     timer: f32,
 }
 
@@ -63,6 +111,11 @@ impl Ball {
             charge,
             component: None,
             moved: false,
+            prev: cell,
+            spin: 0.0,
+            spin_delta: 0.0,
+            core_angle: 0.0,
+            core_delta: 0.0,
             timer: 0.0,
         }
     }
@@ -77,10 +130,14 @@ pub struct ChargeText;
 pub enum Outcome {
     #[default]
     Running,
-    /// Returned to a previous cell with at least as much charge -> perpetual.
-    Won,
-    /// Nowhere legal to go, or charge dropped to zero.
+    /// Nowhere legal to go.
     Stuck,
+    /// Tried to move but the battery was empty. The ball explodes (see
+    /// [`crate::explosion`]).
+    Depleted,
+    /// A self-sustaining loop ran long enough to overload. The whole level
+    /// detonates: the victory.
+    Victory,
 }
 
 /// Per-run bookkeeping: first-arrival charge at each cell, and the flood-filled
@@ -99,8 +156,9 @@ pub struct MoveRecord {
 }
 
 /// Per-run bookkeeping: first-arrival charge at each cell, the flood-filled
-/// route, the solid components, and the itinerary of moves taken.
-#[derive(Resource, Default)]
+/// route, the solid components, the itinerary of moves taken, and how many
+/// laps the ball has completed.
+#[derive(Resource)]
 pub struct Run {
     pub visits: HashMap<IVec2, f32>,
     pub route: HashSet<IVec2>,
@@ -111,6 +169,32 @@ pub struct Run {
     /// Set for one frame when `Tab` enters run mode, so that first press only
     /// takes manual control instead of also nudging the ball.
     pub just_entered: bool,
+    /// The cell where the ball first closed its loop. Each time it returns
+    /// here a lap is complete. `None` until the first loop closure.
+    pub closure: Option<IVec2>,
+    /// True once a loop closure met its charge guarantee — the level is solved.
+    pub solved: bool,
+    /// Laps completed since the run began.
+    pub laps: u32,
+    /// Step-rate multiplier. Grows every lap, so an eternal loop accelerates.
+    pub speed: f32,
+}
+
+impl Default for Run {
+    fn default() -> Self {
+        Self {
+            visits: HashMap::new(),
+            route: HashSet::new(),
+            components: HashMap::new(),
+            itinerary: Vec::new(),
+            outcome: Outcome::default(),
+            just_entered: false,
+            closure: None,
+            solved: false,
+            laps: 0,
+            speed: 1.0,
+        }
+    }
 }
 
 /// Spawn the charge readout (once, at startup).
@@ -165,16 +249,117 @@ pub fn tune_start_charge(
     }
 }
 
-/// Spawn the ball sprite for a fresh run.
-pub fn spawn_ball(commands: &mut Commands, grid: &Grid, start: IVec2, charge: f32) -> Entity {
+/// The ball's three texture layers. The shell rolls, the core aligns to the
+/// surface, and the batteries show the charge.
+#[derive(Resource)]
+pub struct BallTextures {
+    pub shell: Handle<Image>,
+    pub core: Handle<Image>,
+    pub batteries: Handle<Image>,
+}
+
+/// Marker for the rolling outer tyre.
+#[derive(Component)]
+pub struct BallShell;
+
+/// Marker for the stabilised inner chassis. It is rotated to align with the
+/// surface normal so the batteries mounted on it always face away from the
+/// ground.
+#[derive(Component)]
+pub struct BallCore;
+
+/// Marker for a charge-tinted battery sprite.
+#[derive(Component)]
+pub struct BallBattery;
+
+/// Load the ball textures once at startup, nearest-filtered so the pixels stay
+/// crisp when the camera zooms in.
+pub fn setup_ball_texture(mut commands: Commands, assets: Res<AssetServer>) {
+    let nearest = |path: &'static str| -> Handle<Image> {
+        assets
+            .load_builder()
+            .with_settings(|settings: &mut ImageLoaderSettings| {
+                settings.sampler = ImageSampler::nearest();
+            })
+            .load(path)
+    };
+    commands.insert_resource(BallTextures {
+        shell: nearest("sprites/ball_shell.png"),
+        core: nearest("sprites/ball_core.png"),
+        batteries: nearest("sprites/battery_panel.png"),
+    });
+}
+
+/// Average direction from `cell` toward its adjacent solid cells — i.e. toward
+/// the surface the ball hugs. Falls back to straight down when there is none.
+fn surface_normal(grid: &Grid, cell: IVec2) -> Vec2 {
+    let mut sum = Vec2::ZERO;
+    for offset in NEIGHBORS8 {
+        if grid.get(cell + offset) == Some(Cell::Solid) {
+            sum += offset.as_vec2();
+        }
+    }
+    if sum.length_squared() > f32::EPSILON {
+        sum.normalize()
+    } else {
+        Vec2::new(0.0, -1.0)
+    }
+}
+
+/// Spawn the ball for a fresh run: a parent that carries the position, with the
+/// rolling shell and an inner core that carries three charge-tinted batteries.
+/// The core is rotated to the surface normal each frame, so the batteries stay
+/// on the side away from the ground.
+pub fn spawn_ball(
+    commands: &mut Commands,
+    grid: &Grid,
+    textures: &BallTextures,
+    start: IVec2,
+    charge: f32,
+) -> Entity {
     let pos = grid.cell_to_world(start);
-    commands
+    let px = BALL_DIAMETER / BALL_TEX_PX;
+    let ball = commands
         .spawn((
             Ball::new(start, charge),
-            Sprite::from_color(Color::srgb(1.0, 0.55, 0.2), Vec2::splat(CELL_PX * 0.7)),
             Transform::from_xyz(pos.x, pos.y, 5.0),
         ))
-        .id()
+        .id();
+    commands.entity(ball).with_children(|parent| {
+        parent.spawn((
+            BallShell,
+            Sprite {
+                image: textures.shell.clone(),
+                custom_size: Some(Vec2::splat(BALL_DIAMETER)),
+                ..default()
+            },
+            Transform::from_xyz(0.0, 0.0, 0.0),
+        ));
+        parent
+            .spawn((
+                BallCore,
+                Sprite {
+                    image: textures.core.clone(),
+                    custom_size: Some(Vec2::splat(BALL_DIAMETER)),
+                    ..default()
+                },
+                Transform::from_xyz(0.0, 0.0, 0.05),
+            ))
+            .with_children(|core| {
+                for bay in [-1.0_f32, 0.0, 1.0] {
+                    core.spawn((
+                        BallBattery,
+                        Sprite {
+                            image: textures.batteries.clone(),
+                            custom_size: Some(BATT_PX * px),
+                            ..default()
+                        },
+                        Transform::from_xyz(bay * BAY_DX_PX * px, BATT_Y_PX * px, 0.01),
+                    ));
+                }
+            });
+    });
+    ball
 }
 
 /// Advance every ball along its track.
@@ -189,7 +374,9 @@ pub fn step_ball(
     if run.outcome != Outcome::Running || tuning.manual {
         return;
     }
-    let interval = 1.0 / STEPS_PER_SECOND;
+    // Each completed lap raises `speed`, so a solved loop gets faster and
+    // faster. The cap keeps it finite.
+    let interval = 1.0 / (STEPS_PER_SECOND * run.speed.max(0.01));
     let dt = time.delta_secs();
     for mut ball in &mut balls {
         ball.timer += dt;
@@ -211,6 +398,10 @@ pub fn start_run(run: &mut Run, grid: &Grid, start: IVec2, charge: f32) {
     run.visits.insert(start, charge);
     run.itinerary.clear();
     run.outcome = Outcome::Running;
+    run.closure = None;
+    run.solved = false;
+    run.laps = 0;
+    run.speed = 1.0;
 }
 
 /// One tile of movement. Public so the headless replay can drive it.
@@ -265,8 +456,20 @@ pub(crate) fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
         } else {
             0.0
         };
-        let key = if is_trail { 1000.0 } else { 0.0 }
-            + reverse * 20.0
+        // Avoid a dead end when any other option exists. Without this a solved
+        // loop can peel off down a one-cell spur — such as the launch pocket it
+        // started in — and die there instead of looping forever.
+        let dead_end = NEIGHBORS4.iter().all(|nd| {
+            let c = next + *nd;
+            c == ball.cell || !grid.is_track(c) || !run.route.contains(&c)
+        });
+        let key = if dead_end {
+            2000.0
+        } else if is_trail {
+            1000.0
+        } else {
+            0.0
+        } + reverse * 20.0
             + counterclockwise * 10.0
             + (angle + std::f32::consts::PI) * 0.001;
         if best.is_none_or(|(bk, _, _)| key < bk) {
@@ -283,33 +486,26 @@ pub(crate) fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
     // A `Trail` cell is only a loop-closure if the ball actually walked it
     // (recorded in `visits`). Cells filled in by a turn combo are `Trail` too,
     // but were never visited, so they are just passed through.
+    //
+    // Closing a loop no longer ends the run. Meeting the charge guarantee
+    // marks the level solved and the ball loops on (accelerating every lap);
+    // missing it leaves the ball doomed, to roll on until it explodes.
     if is_trail
         && let Some(best_charge) = run.visits.get(&next).copied()
     {
-        if ball.charge + f32::EPSILON < best_charge {
-            run.outcome = Outcome::Stuck;
-            info!(
-                "Ball returned to {:?} with {:.1} < {:.1} charge — not self-sustaining",
-                next, ball.charge, best_charge
-            );
-            return;
+        // The first cell the ball revisits is where its loop closes; every
+        // later return here completes another lap.
+        run.closure.get_or_insert(next);
+        if ball.charge + f32::EPSILON >= best_charge && !run.solved {
+            run.solved = true;
+            info!("Loop closed at {:?}: the level is solved", next);
         }
-        run.outcome = Outcome::Won;
-        info!(
-            "Eternal loop! Back at {:?} with {:.1} >= {:.1} charge",
-            next, ball.charge, best_charge
-        );
     }
 
-    // Lay trail behind us and record the charge we arrived with.
-    if grid.get(ball.cell) == Some(Cell::Surface) {
-        grid.set(ball.cell, Cell::Trail);
-    }
-    run.visits.entry(ball.cell).or_insert(ball.charge);
-
-    // Move charge. Verticals are signed by direction. A horizontal is level, so
-    // it consumes by default (-1), but a horizontal right after a descent is
-    // converted to a gain (+1) — the combo.
+    // Work out what the move would cost *before* committing to it. Verticals
+    // are signed by direction. A horizontal is level, so it consumes by default
+    // (-1), but a horizontal right after a descent is converted to a gain (+1)
+    // — the combo.
     let d = next - ball.cell;
     let after_vertical = previous_dir.is_some_and(|p| p.y != 0);
     let combo = d.y == 0 && after_vertical;
@@ -322,12 +518,46 @@ pub(crate) fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
     } else {
         -CHARGE_PER_CELL
     };
-    ball.charge += charge;
-    if ball.charge < 0.0 {
-        ball.charge = 0.0;
-        run.outcome = Outcome::Stuck;
-        info!("Ball ran out of charge at {:?}", ball.cell);
+
+    // The battery cannot pay for this step: the ball tries to move but there is
+    // nothing left in it, so it bursts on the spot. Rolling downhill (which
+    // gains charge) is still allowed from an empty battery.
+    if ball.charge + charge < 0.0 {
+        run.outcome = Outcome::Depleted;
+        info!(
+            "Ball at {:?} tried to move with {:.1} charge left — boom",
+            ball.cell, ball.charge
+        );
+        return;
     }
+
+    // Set up this move's rolling animation: a full signed turn from the cell
+    // being left to the one being entered, around the normal of the surface
+    // the ball hugs. Because the solid is always on the ball's right,
+    // `cross(direction, normal)` gives a consistent roll sign around a loop.
+    let normal = surface_normal(grid, ball.cell);
+    let roll = (d.x as f32 * normal.y - d.y as f32 * normal.x).signum();
+    ball.spin = (ball.spin + ball.spin_delta).rem_euclid(std::f32::consts::TAU);
+    ball.spin_delta = roll * std::f32::consts::TAU * SHELL_ROLL_PER_CELL;
+
+    // Ease the inner core toward the destination's surface normal by at most a
+    // fixed step per cell, so a corner is reached over many transitions rather
+    // than snapped to.
+    ball.core_angle = wrap_pi(ball.core_angle + ball.core_delta);
+    let goal_normal = surface_normal(grid, next);
+    let goal = goal_normal.x.atan2(-goal_normal.y);
+    ball.core_delta =
+        wrap_pi(goal - ball.core_angle).clamp(-CORE_ALIGN_PER_CELL, CORE_ALIGN_PER_CELL);
+
+    ball.prev = ball.cell;
+
+    // Lay trail behind us and record the charge we arrived with.
+    if grid.get(ball.cell) == Some(Cell::Surface) {
+        grid.set(ball.cell, Cell::Trail);
+    }
+    run.visits.entry(ball.cell).or_insert(ball.charge);
+
+    ball.charge += charge;
     ball.dir = d;
     ball.cell = next;
     ball.moved = true;
@@ -338,30 +568,117 @@ pub(crate) fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
         combo,
         charge,
     });
+
+    // Returning to the loop-closure cell completes a lap. Every lap runs
+    // faster, so a solved loop visibly accelerates toward its eternal state.
+    if run.closure == Some(next) {
+        run.laps += 1;
+        run.speed = (run.speed * SPEEDUP_PER_LAP).min(MAX_SPEED);
+        info!("Lap {} at {:?}: speed x{:.2}", run.laps, next, run.speed);
+        // An eternal (solved) loop eventually overloads and takes the whole
+        // level with it. A doomed loop never gets here — it has no solution.
+        if run.solved && run.laps >= VICTORY_LAPS && run.outcome == Outcome::Running {
+            run.outcome = Outcome::Victory;
+            info!("Eternal loop overloaded — the whole level detonates!");
+        }
+    }
+
+    // Bound the arrow history now that a run can loop indefinitely.
+    let excess = run.itinerary.len().saturating_sub(MAX_ITINERARY);
+    if excess > 0 {
+        run.itinerary.drain(..excess);
+    }
 }
 
-/// Colour the ball by its charge, battery-style: grey when depleted, waxing
-/// through blue to green as it fills. Charge is unbounded, so `t` saturates.
-pub fn update_ball_color(mut balls: Query<(&Ball, &mut Sprite)>) {
-    for (ball, mut sprite) in &mut balls {
-        sprite.color = charge_color(ball.charge);
+/// Colour the ball by its charge, battery-style: red when the battery is
+/// empty (the ball is about to die), sweeping through orange and yellow to
+/// green as it charges. Charge is unbounded, so `t` saturates.
+pub fn update_ball_color(
+    balls: Query<&Ball>,
+    cores: Query<&ChildOf, With<BallCore>>,
+    mut batteries: Query<(&ChildOf, &mut Sprite), With<BallBattery>>,
+) {
+    for (child_of, mut sprite) in &mut batteries {
+        // The batteries hang off the core, which hangs off the ball.
+        let charge = cores
+            .get(child_of.parent())
+            .ok()
+            .and_then(|core| balls.get(core.parent()).ok())
+            .map_or(0.0, |ball| ball.charge);
+        sprite.color = charge_color(charge);
     }
 }
 
 fn charge_color(charge: f32) -> Color {
     let t = (charge / (charge + 8.0)).clamp(0.0, 1.0);
-    let hue = 210.0 - 90.0 * t; // blue -> green
-    let saturation = 0.9 * t;
-    let lightness = 0.40 + 0.25 * t;
+    let hue = 120.0 * t; // red -> yellow -> green
+    let saturation = 0.85;
+    let lightness = 0.45 + 0.15 * t;
     Color::hsl(hue, saturation, lightness)
 }
 
-/// Keep the sprite glued to its grid cell.
-pub fn update_ball_transform(grid: Res<Grid>, mut balls: Query<(&Ball, &mut Transform)>) {
-    for (ball, mut transform) in &mut balls {
-        let pos = grid.cell_to_world(ball.cell);
+/// Wrap an angle into `(-pi, pi]`.
+fn wrap_pi(angle: f32) -> f32 {
+    let a = angle.rem_euclid(std::f32::consts::TAU);
+    if a > std::f32::consts::PI {
+        a - std::f32::consts::TAU
+    } else {
+        a
+    }
+}
+
+/// Smoothly interpolate the sprite from its previous cell to its current one
+/// over a single step, giving the shell its roll and the core its eased turn.
+/// On top of that, offset it toward the solid it hugs so it looks like it is
+/// resting on the surface.
+pub fn update_ball_transform(
+    run: Res<Run>,
+    tuning: Res<Tuning>,
+    grid: Res<Grid>,
+    mut balls: Query<(&Ball, &mut Transform, &Children)>,
+    mut shells: Query<&mut Transform, (With<BallShell>, Without<Ball>, Without<BallCore>)>,
+    mut cores: Query<&mut Transform, (With<BallCore>, Without<Ball>, Without<BallShell>)>,
+) {
+    let interval = 1.0 / (STEPS_PER_SECOND * run.speed.max(0.01));
+
+    for (ball, mut transform, children) in &mut balls {
+        // Paused, manual or finished runs sit at the logical cell. Otherwise
+        // the ball slides from `prev` to `cell` over the step's interval.
+        let progress = if run.outcome != Outcome::Running || tuning.manual {
+            1.0
+        } else {
+            (ball.timer / interval).clamp(0.0, 1.0)
+        };
+
+        let from = grid.cell_to_world(ball.prev);
+        let to = grid.cell_to_world(ball.cell);
+        let center = from.lerp(to, progress);
+
+        // Sit against the surface: blend the normal across the move and close
+        // the gap between the ball's edge and the solid.
+        let normal = surface_normal(&grid, ball.prev)
+            .lerp(surface_normal(&grid, ball.cell), progress);
+        let normal = if normal.length_squared() > f32::EPSILON {
+            normal.normalize()
+        } else {
+            Vec2::new(0.0, -1.0)
+        };
+        let gap = (CELL_PX * 0.5 - BALL_RADIUS).max(0.0);
+        let pos = center + normal * gap;
+
         transform.translation.x = pos.x;
         transform.translation.y = pos.y;
+        // Only the shell rolls. The core eases toward the surface normal (deck
+        // away from the ground); its batteries ride along.
+        let roll = ball.spin + progress * ball.spin_delta;
+        let core_angle = ball.core_angle + progress * ball.core_delta;
+        for child in children.iter() {
+            if let Ok(mut shell) = shells.get_mut(child) {
+                shell.rotation = Quat::from_rotation_z(roll);
+            } else if let Ok(mut core) = cores.get_mut(child) {
+                core.rotation = Quat::from_rotation_z(core_angle);
+            }
+        }
     }
 }
 
@@ -592,6 +909,252 @@ mod tests {
         step_once(&mut grid, &mut run, &mut ball);
         assert!(!run.itinerary.last().unwrap().combo);
         assert_eq!(ball.charge, TEST_CHARGE - 1.0);
+    }
+
+    /// A ball with an empty battery cannot pay for a level move, so it explodes
+    /// on the spot instead of taking the step.
+    #[test]
+    fn empty_battery_explodes_instead_of_moving() {
+        let mut grid = grid();
+        for x in 5..=10 {
+            grid.set(IVec2::new(x, 5), Cell::Surface);
+            grid.set(IVec2::new(x, 6), Cell::Solid);
+        }
+        let mut run = Run::default();
+        run.route = grid.reachable(IVec2::new(5, 5));
+        run.components = grid.solid_components();
+        run.visits.insert(IVec2::new(5, 5), 0.0);
+        let mut ball = Ball::new(IVec2::new(5, 5), 0.0);
+
+        step_once(&mut grid, &mut run, &mut ball);
+
+        assert_eq!(run.outcome, Outcome::Depleted);
+        assert_eq!(ball.cell, IVec2::new(5, 5), "ball moved without paying");
+        assert!(
+            run.itinerary.is_empty(),
+            "a failed move must not be recorded"
+        );
+    }
+
+    /// Rolling downhill still gains charge, so an empty battery may take that
+    /// step — the explosion is only for moves the battery cannot afford.
+    #[test]
+    fn empty_battery_can_roll_downhill() {
+        let mut grid = grid();
+        grid.set(IVec2::new(5, 5), Cell::Solid);
+        grid.set(IVec2::new(6, 5), Cell::Surface);
+        grid.set(IVec2::new(6, 4), Cell::Surface);
+
+        let mut run = Run::default();
+        run.route = grid.reachable(IVec2::new(6, 5));
+        run.components = grid.solid_components();
+        run.visits.insert(IVec2::new(6, 5), 0.0);
+        let mut ball = Ball::new(IVec2::new(6, 5), 0.0);
+
+        step_once(&mut grid, &mut run, &mut ball);
+
+        assert_eq!(run.outcome, Outcome::Running);
+        assert_eq!(ball.cell, IVec2::new(6, 4));
+        assert_eq!(ball.charge, 1.0);
+    }
+
+    /// A loop that closes without meeting its charge guarantee no longer stops
+    /// as `Stuck`: the ball is doomed but runs on until the battery empties and
+    /// it explodes.
+    #[test]
+    fn doomed_loop_runs_until_it_explodes() {
+        // A square ring of surface around a 3x3 solid block. The ring loses
+        // charge every lap, so the guarantee can never be met.
+        let mut grid = grid();
+        for y in 5..8 {
+            for x in 5..8 {
+                grid.paint(IVec2::new(x, y), Cell::Solid);
+            }
+        }
+        grid.regenerate_surfaces();
+        let start = grid.find_start().unwrap();
+
+        let mut run = Run::default();
+        let mut ball = Ball::new(start, TEST_CHARGE);
+        start_run(&mut run, &grid, start, TEST_CHARGE);
+
+        for _ in 0..500 {
+            if run.outcome != Outcome::Running {
+                break;
+            }
+            step_once(&mut grid, &mut run, &mut ball);
+        }
+
+        assert!(!run.solved, "a charge-losing ring cannot be solved");
+        assert!(run.laps >= 1, "the ball still completed a lap first");
+        assert_eq!(
+            run.outcome,
+            Outcome::Depleted,
+            "a doomed loop must run until it explodes"
+        );
+    }
+
+    /// A loop that meets its charge guarantee is marked solved, but the ball
+    /// keeps looping (and getting faster) instead of ending the run.
+    #[test]
+    fn solved_loop_keeps_running() {
+        // A hollow 4x9 box: solid border with a 2-wide interior, the shape of
+        // the tutorial once its missing block has been drawn.
+        let mut grid = grid();
+        for x in 10..=13 {
+            for y in 10..=18 {
+                if x == 10 || x == 13 || y == 10 || y == 18 {
+                    grid.paint(IVec2::new(x, y), Cell::Solid);
+                }
+            }
+        }
+        grid.regenerate_surfaces();
+        // Start inside the box, like the tutorial's placed start.
+        let start = IVec2::new(11, 17);
+
+        let mut run = Run::default();
+        let mut ball = Ball::new(start, TEST_CHARGE);
+        start_run(&mut run, &grid, start, TEST_CHARGE);
+
+        // Run a few laps, stopping well before the victory overload.
+        while run.outcome == Outcome::Running && run.laps < 3 {
+            step_once(&mut grid, &mut run, &mut ball);
+        }
+
+        assert!(run.solved, "the box loop should solve");
+        assert!(run.laps >= 3, "laps should keep being counted");
+        assert!(run.speed > 1.0, "each lap should speed the ball up");
+        assert_eq!(
+            run.outcome,
+            Outcome::Running,
+            "a solved loop must keep running"
+        );
+    }
+
+    /// An eternal loop eventually overloads and clears the level.
+    #[test]
+    fn solved_loop_eventually_wins() {
+        let mut grid = grid();
+        for x in 10..=13 {
+            for y in 10..=18 {
+                if x == 10 || x == 13 || y == 10 || y == 18 {
+                    grid.paint(IVec2::new(x, y), Cell::Solid);
+                }
+            }
+        }
+        grid.regenerate_surfaces();
+        let start = IVec2::new(11, 17);
+
+        let mut run = Run::default();
+        let mut ball = Ball::new(start, TEST_CHARGE);
+        start_run(&mut run, &grid, start, TEST_CHARGE);
+
+        for _ in 0..2000 {
+            if run.outcome != Outcome::Running {
+                break;
+            }
+            step_once(&mut grid, &mut run, &mut ball);
+        }
+
+        assert!(run.solved, "it must solve before it can overload");
+        assert_eq!(run.outcome, Outcome::Victory, "the loop should clear the level");
+    }
+
+    /// A forward move is a full signed turn from the cell left to the cell
+    /// entered. On a top surface, travelling right rolls clockwise.
+    #[test]
+    fn a_move_is_one_full_turn() {
+        let mut grid = grid();
+        for x in 4..=8 {
+            grid.set(IVec2::new(x, 5), Cell::Solid);
+            grid.set(IVec2::new(x, 6), Cell::Surface);
+        }
+        let mut run = Run::default();
+        run.route = grid.reachable(IVec2::new(4, 6));
+        run.components = grid.solid_components();
+        run.visits.insert(IVec2::new(4, 6), TEST_CHARGE);
+        let mut ball = Ball::new(IVec2::new(4, 6), TEST_CHARGE);
+
+        step_once(&mut grid, &mut run, &mut ball);
+
+        assert_eq!(ball.cell, IVec2::new(5, 6));
+        assert_eq!(ball.prev, IVec2::new(4, 6), "the move remembers its start");
+        assert!(
+            ball.spin_delta < 0.0,
+            "moving right on top should roll clockwise"
+        );
+        assert!(
+            (ball.spin_delta.abs() - std::f32::consts::TAU * SHELL_ROLL_PER_CELL).abs() < 1e-4,
+            "each cell should roll a fixed fraction of a turn"
+        );
+    }
+
+    /// The inner core never snaps to a new normal: on each cell transition it
+    /// turns by at most [`CORE_ALIGN_PER_CELL`].
+    #[test]
+    fn core_alignment_steps_gradually() {
+        let mut grid = grid();
+        for y in 5..9 {
+            for x in 5..9 {
+                grid.paint(IVec2::new(x, y), Cell::Solid);
+            }
+        }
+        grid.regenerate_surfaces();
+        let start = grid.find_start().unwrap();
+
+        let mut run = Run::default();
+        let mut ball = Ball::new(start, TEST_CHARGE);
+        start_run(&mut run, &grid, start, TEST_CHARGE);
+
+        let mut moved_total = 0.0;
+        for _ in 0..24 {
+            if run.outcome != Outcome::Running {
+                break;
+            }
+            let before = ball.core_angle;
+            step_once(&mut grid, &mut run, &mut ball);
+            let moved = wrap_pi(ball.core_angle - before).abs();
+            assert!(
+                moved <= CORE_ALIGN_PER_CELL + 1e-4,
+                "core turned {moved} rad in one cell"
+            );
+            moved_total += moved;
+        }
+        assert!(moved_total > 0.0, "the core should turn as the ground bends");
+    }
+
+    /// A loop is all one direction: every move on a clockwise contour rolls
+    /// the same way, so the ball does not judder back and forth.
+    #[test]
+    fn a_loop_rolls_consistently() {
+        let mut grid = grid();
+        for y in 5..8 {
+            for x in 5..8 {
+                grid.paint(IVec2::new(x, y), Cell::Solid);
+            }
+        }
+        grid.regenerate_surfaces();
+        let start = grid.find_start().unwrap();
+
+        let mut run = Run::default();
+        let mut ball = Ball::new(start, TEST_CHARGE);
+        start_run(&mut run, &grid, start, TEST_CHARGE);
+
+        let mut signs = Vec::new();
+        for _ in 0..20 {
+            if run.outcome != Outcome::Running {
+                break;
+            }
+            step_once(&mut grid, &mut run, &mut ball);
+            signs.push(ball.spin_delta.signum());
+        }
+
+        assert!(signs.len() > 8, "the ball should have moved around the ring");
+        let first = signs[0];
+        assert!(
+            signs.iter().all(|s| *s == first),
+            "roll direction changed within a loop: {signs:?}"
+        );
     }
 
     /// With no orthogonal move available the ball stops and never reverses.

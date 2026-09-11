@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use bevy::prelude::*;
 
 use crate::ball::{Ball, Outcome, Run, Tuning};
+use crate::explosion::Detonation;
 use crate::grid::{CELL_PX, Cell, GRID_H, Grid};
 use crate::paint::{Debug, Mode, Placement};
 use crate::tutorial::Tutorial;
@@ -70,19 +71,7 @@ fn char_cell(c: char) -> Option<Cell> {
 
 /// Bounding box of every non-empty cell, or `None` if the board is blank.
 fn content_bounds(grid: &Grid) -> Option<(IVec2, IVec2)> {
-    let mut min = IVec2::new(grid.w, grid.h);
-    let mut max = IVec2::new(-1, -1);
-    for y in 0..grid.h {
-        for x in 0..grid.w {
-            if grid.get(IVec2::new(x, y)) != Some(Cell::Empty) {
-                min.x = min.x.min(x);
-                min.y = min.y.min(y);
-                max.x = max.x.max(x);
-                max.y = max.y.max(y);
-            }
-        }
-    }
-    (max.x >= 0).then_some((min, max))
+    grid.content_bounds()
 }
 
 /// Render the non-empty region as text. The marker (ball) shows as `@`.
@@ -248,6 +237,20 @@ impl Levels {
         Some(self.files[index].clone())
     }
 
+    /// The next non-tutorial level *after* the current one, without wrapping.
+    /// `None` means the current level was the last: the game is won.
+    pub fn next_game_after(&mut self) -> Option<PathBuf> {
+        let start = self.current.max(0) as usize;
+        let (index, _) = self
+            .files
+            .iter()
+            .enumerate()
+            .skip(start + 1)
+            .find(|(_, path)| !is_tutorial(path))?;
+        self.current = index as isize;
+        Some(self.files[index].clone())
+    }
+
     /// The tutorial level, for the menu's **Tutorial** entry.
     pub fn tutorial(&mut self) -> Option<PathBuf> {
         let index = self.files.iter().position(|path| is_tutorial(path))?;
@@ -387,6 +390,40 @@ pub fn cycle_level(
     }
 }
 
+/// After the victory detonation has consumed the level, load the next game
+/// level — or, if that was the last one, leave the final VICTORY banner up.
+#[allow(clippy::too_many_arguments)]
+pub fn advance_detonation(
+    mut detonation: ResMut<Detonation>,
+    mut levels: ResMut<Levels>,
+    mut grid: ResMut<Grid>,
+    mut place: ResMut<Placement>,
+    mut tuning: ResMut<Tuning>,
+    mut run: ResMut<Run>,
+    mut mode: ResMut<Mode>,
+    mut tutorial: ResMut<Tutorial>,
+    mut progress: ResMut<Progress>,
+) {
+    if *detonation != Detonation::Complete {
+        return;
+    }
+    let Some(path) = levels.next_game_after() else {
+        return; // last level: the VICTORY banner stays up
+    };
+    load_level(
+        &path,
+        &mut grid,
+        &mut place,
+        &mut tuning,
+        &mut run,
+        &mut mode,
+        &mut tutorial,
+        &mut progress,
+    );
+    *detonation = Detonation::Idle;
+    info!("Victory — loaded next level {}", path.display());
+}
+
 /// `Y` save / `L` load.
 pub fn debug_io(
     keys: Res<ButtonInput<KeyCode>>,
@@ -466,6 +503,10 @@ pub fn replay(path: &str, max_steps: usize) {
         );
         println!("{}", ascii(&grid, Some(ball.cell)));
     }
+    println!(
+        "solved={} laps={} speed={:.2}",
+        run.solved, run.laps, run.speed
+    );
     println!("outcome: {:?}", run.outcome);
     println!("{}", ascii(&grid, Some(ball.cell)));
 }
@@ -533,6 +574,18 @@ mod tests {
         list.current = 2; // sitting on the last level
         // Wrapping forward must not land on the tutorial.
         assert_eq!(list.next_game(), Some(PathBuf::from("levels/01.txt")));
+    }
+
+    #[test]
+    fn next_game_after_stops_at_the_last_level() {
+        let mut list = levels(&["levels/00_tutorial.txt", "levels/01.txt", "levels/02.txt"]);
+        // From the tutorial, the next game level is 01.
+        list.current = 0;
+        assert_eq!(list.next_game_after(), Some(PathBuf::from("levels/01.txt")));
+        // From the middle it finds 02, and then there is nothing after it.
+        assert_eq!(list.next_game_after(), Some(PathBuf::from("levels/02.txt")));
+        assert_eq!(list.next_game_after(), None);
+        assert_eq!(list.current, 2);
     }
 
     #[test]
