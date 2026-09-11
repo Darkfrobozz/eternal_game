@@ -93,8 +93,8 @@ pub struct MoveRecord {
     /// True when this was a combo (a horizontal converted by the preceding
     /// vertical).
     pub combo: bool,
-    /// True when that combo consumed charge (ascending) rather than gained.
-    pub costly: bool,
+    /// Charge this move added (positive accumulates, negative consumes).
+    pub charge: f32,
 }
 
 /// Per-run bookkeeping: first-arrival charge at each cell, the flood-filled
@@ -328,7 +328,7 @@ pub(crate) fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
         cell: from,
         dir: d,
         combo,
-        costly: combo && charge < 0.0,
+        charge,
     });
 }
 
@@ -357,17 +357,24 @@ pub fn manual_step(
     }
 }
 
-/// Draw the movement itinerary: an arrow at every cell the ball left. Plain
-/// moves are pale blue, a gaining combo is gold, and a costly (ascending)
-/// combo is red.
+/// Draw the movement itinerary: an arrow at every cell the ball left.
+/// - plain accumulating step -> green, plain consuming step -> orange,
+/// - neutral (dy 0 with no preceding vertical) -> pale blue,
+/// - gaining combo -> gold, costly combo -> red.
 pub fn draw_itinerary(run: Res<Run>, grid: Res<Grid>, mut gizmos: Gizmos) {
     for m in &run.itinerary {
         let start = grid.cell_to_world(m.cell);
         let end = start + m.dir.as_vec2() * (CELL_PX * 0.9);
-        let color = if m.combo && m.costly {
-            Color::srgb(1.0, 0.25, 0.2)
-        } else if m.combo {
-            Color::srgb(1.0, 0.80, 0.2)
+        let color = if m.combo {
+            if m.charge < 0.0 {
+                Color::srgb(1.0, 0.25, 0.2)
+            } else {
+                Color::srgb(1.0, 0.90, 0.15)
+            }
+        } else if m.charge > 0.0 {
+            Color::srgb(0.30, 0.85, 0.35)
+        } else if m.charge < 0.0 {
+            Color::srgb(1.0, 0.55, 0.10)
         } else {
             Color::srgb(0.55, 0.75, 0.95)
         };
@@ -539,7 +546,7 @@ mod tests {
         step_once(&mut grid, &mut run, &mut ball); // right after up: combo -1
         assert_eq!(ball.charge, TEST_CHARGE - 2.0);
         let last = run.itinerary.last().expect("a move");
-        assert!(last.combo && last.costly, "up-then-right is a costly combo");
+        assert!(last.combo && last.charge < 0.0, "up-then-right is a costly combo");
     }
 
     /// With no orthogonal move available the ball stops and never reverses.
