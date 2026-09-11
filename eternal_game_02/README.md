@@ -42,8 +42,8 @@ Cell values in the array: `0` empty, `1` solid (painted by the pen), `2` surface
 - Middle-click places the ball; `B` returns to the automatic start.
 - `[` / `]` adjust the starting charge.
 - `M` toggles auto / manual stepping; in manual mode `N` advances one step.
-- Each step leaves an **arrow** showing the direction moved; combo moves are
-  drawn gold.
+- Each step leaves an **arrow** showing the direction moved: **green** if the
+  step accumulated charge, **orange** if it consumed.
 
 ## Debugging / replay
 

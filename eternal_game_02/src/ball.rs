@@ -353,20 +353,14 @@ pub fn manual_step(
     }
 }
 
-/// Draw the movement itinerary: an arrow at every cell the ball left.
-/// - plain accumulating step -> green, plain consuming step -> orange,
-/// - gaining combo -> gold, costly combo -> red.
+/// Draw the movement itinerary: an arrow at every cell the ball left, coloured
+/// purely by what the step did to the charge — green accumulates, orange
+/// consumes. A horizontal is just +1 (green) or -1 (orange) like anything else.
 pub fn draw_itinerary(run: Res<Run>, grid: Res<Grid>, mut gizmos: Gizmos) {
     for m in &run.itinerary {
         let start = grid.cell_to_world(m.cell);
         let end = start + m.dir.as_vec2() * (CELL_PX * 0.9);
-        let color = if m.combo {
-            if m.charge < 0.0 {
-                Color::srgb(1.0, 0.25, 0.2)
-            } else {
-                Color::srgb(1.0, 0.90, 0.15)
-            }
-        } else if m.charge > 0.0 {
+        let color = if m.charge > 0.0 {
             Color::srgb(0.30, 0.85, 0.35)
         } else {
             Color::srgb(1.0, 0.55, 0.10)
