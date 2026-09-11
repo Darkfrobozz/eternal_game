@@ -41,6 +41,9 @@ pub struct Ball {
     pub cell: IVec2,
     pub dir: IVec2,
     pub charge: f32,
+    /// Solid cell the ball is currently following. Keeps it on one contour
+    /// when two lines run close enough for their surfaces to touch.
+    pub anchor: Option<IVec2>,
     timer: f32,
 }
 
@@ -50,6 +53,7 @@ impl Ball {
             cell,
             dir: IVec2::X,
             charge,
+            anchor: None,
             timer: 0.0,
         }
     }
@@ -163,17 +167,32 @@ fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
     // Pick the most clockwise (rightmost) neighbour on the route, never
     // doubling back and never cutting a wall corner. Fresh surface always
     // beats re-entering the trail.
-    let mut best: Option<(f32, IVec2, bool)> = None; // (sort key, cell, is_trail)
+    let mut best: Option<(f32, IVec2, bool, IVec2)> = None; // key, cell, is_trail, anchor
     for d in NEIGHBORS8 {
         let next = ball.cell + d;
         if next == behind
             || !grid.is_track(next)
             || grid.step_blocked(ball.cell, d)
-            || !grid.shares_solid(ball.cell, next)
             || !run.route.contains(&next)
         {
             continue;
         }
+
+        // Stay on the contour we are already following: the solid shared with
+        // the next cell has to be next to the current anchor.
+        let shared = grid.common_solids(ball.cell, next);
+        let anchor = match ball.anchor {
+            None => match shared.first() {
+                Some(solid) => *solid,
+                None => continue,
+            },
+            Some(current) => match shared.iter().copied().find(|s| chebyshev(*s, current) <= 1)
+            {
+                Some(solid) => solid,
+                None => continue,
+            },
+        };
+
         let is_trail = grid.get(next) == Some(Cell::Trail);
         let angle = turn(ball.dir.as_vec2(), d.as_vec2());
         // Prefer, in order: fresh surface, a diagonal step (go as far as
@@ -184,16 +203,17 @@ fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
             + orthogonal * 100.0
             + counterclockwise * 10.0
             + (angle + std::f32::consts::PI) * 0.001;
-        if best.is_none_or(|(bk, _, _)| key < bk) {
-            best = Some((key, next, is_trail));
+        if best.is_none_or(|(bk, _, _, _)| key < bk) {
+            best = Some((key, next, is_trail, anchor));
         }
     }
 
-    let Some((_, next, is_trail)) = best else {
+    let Some((_, next, is_trail, anchor)) = best else {
         run.outcome = Outcome::Stuck;
         info!("Ball stuck at {:?}: no track ahead", ball.cell);
         return;
     };
+    ball.anchor = Some(anchor);
 
     if is_trail {
         let best_charge = run.visits.get(&next).copied().unwrap_or(f32::INFINITY);
@@ -273,6 +293,11 @@ fn turn(from: Vec2, to: Vec2) -> f32 {
     cross.atan2(dot)
 }
 
+/// Chebyshev (king-move) distance between two cells.
+fn chebyshev(a: IVec2, b: IVec2) -> i32 {
+    (a.x - b.x).abs().max((a.y - b.y).abs())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,6 +351,32 @@ mod tests {
             visited.insert(ball.cell);
         }
         assert!(visited.len() > 10, "ball barely moved: {}", visited.len());
+    }
+
+    /// Two parallel lines one cell apart must not let the ball hop across at
+    /// the ends, where each line's surface touches the other's terminal solid.
+    #[test]
+    fn parallel_lines_do_not_hop() {
+        let mut grid = grid();
+        for y in 10..=20 {
+            grid.set(IVec2::new(0, y), Cell::Solid);
+            grid.set(IVec2::new(2, y), Cell::Solid);
+            grid.set(IVec2::new(1, y), Cell::Surface);
+        }
+        for x in 0..=2 {
+            grid.set(IVec2::new(x, 9), Cell::Surface);
+            grid.set(IVec2::new(x, 21), Cell::Surface);
+        }
+
+        let mut run = Run::default();
+        run.route = grid.reachable(IVec2::new(1, 20));
+        run.visits.insert(IVec2::new(1, 20), TEST_CHARGE);
+        let mut ball = Ball::new(IVec2::new(1, 20), TEST_CHARGE);
+        ball.dir = IVec2::new(0, 1); // heading up
+        ball.anchor = Some(IVec2::new(0, 20)); // following the left line
+
+        step_once(&mut grid, &mut run, &mut ball);
+        assert!(ball.cell.x <= 1, "hopped to the right line: {:?}", ball.cell);
     }
 
     /// A dead-end line must stop the ball, never send it back the way it came.

@@ -119,18 +119,25 @@ impl Grid {
             && self.solid_or_out(from + IVec2::new(0, dir.y))
     }
 
-    /// True when `a` and `b` are both adjacent to some common solid cell. This
-    /// is the local "same contour" test: it stops the ball hopping from one
-    /// wall's surface to a different wall's surface.
+    /// Solid cells adjacent to both `a` and `b` — the contour(s) they share.
+    pub fn common_solids(&self, a: IVec2, b: IVec2) -> Vec<IVec2> {
+        NEIGHBORS8
+            .iter()
+            .filter_map(|offset| {
+                let solid = a + *offset;
+                if self.get(solid) != Some(Cell::Solid) {
+                    return None;
+                }
+                let d = solid - b;
+                (d.x.abs() <= 1 && d.y.abs() <= 1).then_some(solid)
+            })
+            .collect()
+    }
+
+    /// True when `a` and `b` are both adjacent to some common solid cell.
+    #[cfg(test)]
     pub fn shares_solid(&self, a: IVec2, b: IVec2) -> bool {
-        NEIGHBORS8.iter().any(|offset| {
-            let solid = a + *offset;
-            if self.get(solid) != Some(Cell::Solid) {
-                return false;
-            }
-            let d = solid - b;
-            d.x.abs() <= 1 && d.y.abs() <= 1
-        })
+        !self.common_solids(a, b).is_empty()
     }
 
     /// The pen. `Cell::Solid` lays down a `1` and grows `2` surface on every
