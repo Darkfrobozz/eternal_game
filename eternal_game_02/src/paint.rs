@@ -181,6 +181,8 @@ pub fn handle_mode(
             tuning.manual = tab;
             grid.reset_trail();
             *run = Run::default();
+            // The entering `Tab` only takes manual control; the next one nudges.
+            run.just_entered = tab;
             let chosen = placement
                 .start
                 .filter(|cell| grid.is_track(*cell))

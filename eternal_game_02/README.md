@@ -71,8 +71,8 @@ Progress is written by `load_level` whenever a game level is loaded, including
 ### Playing
 
 Normal (play-only): `Space` starts the ball rolling and stops it again;
-`Tab` takes manual control (from pen mode it enters run mode paused, and in
-run mode each press nudges the ball one cell); `PageDown` loads the next game
+`Tab` takes manual control (from pen mode it enters run mode paused and the
+next press nudges the ball one cell); `PageDown` loads the next game
 level; left-drag draws solids, right-drag erases, `C` clears. Run mode is
 either automatic (`Space`) or manual (`Tab`). The charge readout and
 controller hint are hidden; the player infers charge from the arrows (green

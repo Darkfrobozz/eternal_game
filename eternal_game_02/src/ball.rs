@@ -108,6 +108,9 @@ pub struct Run {
     pub components: HashMap<IVec2, usize>,
     pub itinerary: Vec<MoveRecord>,
     pub outcome: Outcome,
+    /// Set for one frame when `Tab` enters run mode, so that first press only
+    /// takes manual control instead of also nudging the ball.
+    pub just_entered: bool,
 }
 
 /// Spawn the charge readout (once, at startup).
@@ -370,6 +373,12 @@ pub fn manual_step(
     mut run: ResMut<Run>,
     mut balls: Query<&mut Ball>,
 ) {
+    // The `Tab` that enters run mode only activates manual control; the next
+    // press nudges the ball.
+    if run.just_entered {
+        run.just_entered = false;
+        return;
+    }
     // `Tab` always nudges the ball one cell. `N` does the same, but only in
     // the debug manual mode where automatic stepping is already paused.
     let nudge = keys.just_pressed(KeyCode::Tab)
