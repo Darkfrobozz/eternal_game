@@ -7,9 +7,11 @@
 //! 1. drawing solids on the grid,
 //! 2. `Tab` to nudge the ball forward one cell,
 //! 3. `Space` to start the ball rolling,
-//! 4. the scroll wheel to zoom,
-//! 5. `W`/`A`/`S`/`D` to pan,
-//! 6. closing an eternal loop.
+//! 4. `Space` again to pause it,
+//! 5. the scroll wheel to zoom,
+//! 6. `W`/`A`/`S`/`D` to pan,
+//! 7. closing an eternal loop,
+//! 8. `E` to leave run mode.
 //!
 //! The objectives are a checklist, not a strict sequence: each is latched the
 //! moment it happens, so the player is free to do them in any order.
@@ -28,13 +30,15 @@ use crate::paint::Mode;
 use crate::screen::{ScreenAnchor, ScreenText};
 
 /// The tutorial's objectives, in display order.
-const OBJECTIVES: [&str; 6] = [
+const OBJECTIVES: [&str; 8] = [
     "Draw on the grid (left-click and drag)",
     "Press TAB to nudge the ball one step",
     "Press SPACE to start rolling the ball",
+    "Press SPACE again to pause the ball",
     "Scroll the mouse wheel to zoom in and out",
     "Hold W, A, S, D to pan the view",
     "Make the ball loop forever",
+    "Press E to leave run mode",
 ];
 
 /// Everything the tutorial can observe about a frame.
@@ -43,6 +47,8 @@ struct Observed {
     drawn: bool,
     stepped: bool,
     rolled: bool,
+    paused: bool,
+    exited: bool,
     zoomed: bool,
     panned: bool,
     looped: bool,
@@ -56,6 +62,8 @@ pub struct Tutorial {
     drawn: bool,
     stepped: bool,
     rolled: bool,
+    paused: bool,
+    exited: bool,
     zoomed: bool,
     panned: bool,
     looped: bool,
@@ -77,8 +85,7 @@ impl Tutorial {
 
     /// Has every objective been met?
     pub fn complete(&self) -> bool {
-        let flags = self.flags();
-        flags.iter().all(|done| *done)
+        self.flags().iter().all(|done| *done)
     }
 
     /// Per-objective latches, in [`OBJECTIVES`] order.
@@ -87,6 +94,8 @@ impl Tutorial {
             self.drawn,
             self.stepped,
             self.rolled,
+            self.paused,
+            self.exited,
             self.zoomed,
             self.panned,
             self.looped,
@@ -99,6 +108,8 @@ impl Tutorial {
         self.drawn |= observed.drawn;
         self.stepped |= observed.stepped;
         self.rolled |= observed.rolled;
+        self.paused |= observed.paused;
+        self.exited |= observed.exited;
         self.zoomed |= observed.zoomed;
         self.panned |= observed.panned;
         self.looped |= observed.looped;
@@ -140,14 +151,22 @@ pub fn track_tutorial(
     mut wheel: MessageReader<MouseWheel>,
     mut tutorial: ResMut<Tutorial>,
     mut last_steps: Local<usize>,
+    mut last_mode: Local<Mode>,
 ) {
     // Always drain the wheel so a future tutorial doesn't read stale events.
     let scrolled = wheel.read().any(|event| event.y.abs() > f32::EPSILON);
+
+    // `handle_mode` has already run this frame, so an `E` that left run mode
+    // shows up here as a run -> pen transition.
+    let was_running = *last_mode == Mode::Run;
+    *last_mode = *mode;
+
     if !tutorial.active || tutorial.complete() {
         return;
     }
 
     let running = *mode == Mode::Run;
+    let space = keys.just_pressed(KeyCode::Space);
     // Did the ball actually advance since last frame? `Tab` also *enters* run
     // mode, which does not count as a nudge, so compare the itinerary. When
     // the itinerary shrinks, a fresh run started this frame.
@@ -174,8 +193,11 @@ pub fn track_tutorial(
     tutorial.observe(Observed {
         drawn,
         stepped: keys.just_pressed(KeyCode::Tab) && took_step,
-        // `Space` only "starts rolling" when it leaves the ball in auto mode.
-        rolled: keys.just_pressed(KeyCode::Space) && running && !tuning.manual,
+        // `Space` starts rolling when it leaves the ball in auto mode, and
+        // pauses when it leaves it paused in manual mode.
+        rolled: space && running && !tuning.manual,
+        paused: space && running && tuning.manual,
+        exited: keys.just_pressed(KeyCode::KeyE) && was_running,
         zoomed: scrolled,
         panned,
         looped: run.outcome == Outcome::Won,
@@ -226,6 +248,8 @@ mod tests {
             drawn: true,
             stepped: true,
             rolled: true,
+            paused: true,
+            exited: true,
             zoomed: true,
             panned: true,
             looped: true,
@@ -244,15 +268,21 @@ mod tests {
             zoomed: true,
             ..default()
         });
-        assert_eq!(tutorial.flags(), [false, false, false, true, false, false]);
+        assert_eq!(
+            tutorial.flags(),
+            [false, false, false, false, false, true, false, false]
+        );
         assert!(!tutorial.complete());
 
-        // Looping before space/tab still latches.
+        // Looping before the run controls still latches.
         tutorial.observe(Observed {
             looped: true,
             ..default()
         });
-        assert_eq!(tutorial.flags(), [false, false, false, true, false, true]);
+        assert_eq!(
+            tutorial.flags(),
+            [false, false, false, false, false, true, false, true]
+        );
     }
 
     #[test]

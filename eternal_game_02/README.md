@@ -118,14 +118,16 @@ cells if you want it in the middle.
 
 The tutorial is attached to any level file whose name contains `tutorial`.
 Loading such a level activates [`Tutorial`](src/tutorial.rs), which shows a
-six-item checklist:
+eight-item checklist:
 
 1. draw on the grid (left-click and drag),
 2. `Tab` to nudge the ball one cell,
 3. `Space` to start rolling,
-4. the scroll wheel to zoom,
-5. `W`/`A`/`S`/`D` to pan,
-6. make the ball loop forever (a `Won` run).
+4. `Space` again to pause,
+5. the scroll wheel to zoom,
+6. `W`/`A`/`S`/`D` to pan,
+7. make the ball loop forever (a `Won` run),
+8. `E` to leave run mode.
 
 Drawing is detected as any solid the level did not lock, and looping as
 `run.outcome == Outcome::Won`. The checklist is not a strict sequence: each
