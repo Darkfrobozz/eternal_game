@@ -19,8 +19,21 @@ use crate::grid::{CELL_PX, Cell, GRID_H, Grid, NEIGHBORS8};
 pub const STEPS_PER_SECOND: f32 = 6.0;
 /// Charge gained or spent per cell moved.
 pub const CHARGE_PER_CELL: f32 = 1.0;
-/// Charge the ball starts a run with, so it can afford its first flat/up steps.
-pub const START_CHARGE: f32 = 10.0;
+
+/// Tunable run parameters. Defaults are for the real game; tests and manual
+/// experiments can raise [`Tuning::start_charge`].
+#[derive(Resource)]
+pub struct Tuning {
+    /// Charge the ball starts a run with. Zero by default, so the ball has to
+    /// earn its energy; bump it to let a run start on flat or uphill ground.
+    pub start_charge: f32,
+}
+
+impl Default for Tuning {
+    fn default() -> Self {
+        Self { start_charge: 0.0 }
+    }
+}
 
 /// The ball. `cell` is its grid position, `dir` its last step direction.
 #[derive(Component)]
@@ -32,11 +45,11 @@ pub struct Ball {
 }
 
 impl Ball {
-    pub fn new(cell: IVec2) -> Self {
+    pub fn new(cell: IVec2, charge: f32) -> Self {
         Self {
             cell,
             dir: IVec2::X,
-            charge: START_CHARGE,
+            charge,
             timer: 0.0,
         }
     }
@@ -69,7 +82,7 @@ pub struct Run {
 /// Spawn the charge readout (once, at startup).
 pub fn spawn_charge_text(commands: &mut Commands) {
     commands.spawn((
-        Text2d::new(format!("Charge: {START_CHARGE:.1}")),
+        Text2d::new("Charge: 0.0"),
         TextFont {
             font_size: FontSize::Px(19.0),
             ..default()
@@ -80,23 +93,38 @@ pub fn spawn_charge_text(commands: &mut Commands) {
     ));
 }
 
-/// Refresh the charge readout every frame.
+/// Refresh the charge readout every frame. In pen mode there is no ball, so
+/// it shows the configured starting charge instead.
 pub fn update_charge_text(
+    tuning: Res<Tuning>,
     balls: Query<&Ball>,
     mut texts: Query<&mut Text2d, With<ChargeText>>,
 ) {
-    let charge = balls.iter().next().map_or(0.0, |b| b.charge);
+    let charge = balls
+        .iter()
+        .next()
+        .map_or(tuning.start_charge, |b| b.charge);
     for mut text in &mut texts {
         text.0 = format!("Charge: {charge:.1}");
     }
 }
 
+/// `[` / `]` nudge the starting charge while testing.
+pub fn tune_start_charge(keys: Res<ButtonInput<KeyCode>>, mut tuning: ResMut<Tuning>) {
+    if keys.just_pressed(KeyCode::BracketLeft) {
+        tuning.start_charge = (tuning.start_charge - 1.0).max(0.0);
+    }
+    if keys.just_pressed(KeyCode::BracketRight) {
+        tuning.start_charge += 1.0;
+    }
+}
+
 /// Spawn the ball sprite for a fresh run.
-pub fn spawn_ball(commands: &mut Commands, grid: &Grid, start: IVec2) -> Entity {
+pub fn spawn_ball(commands: &mut Commands, grid: &Grid, start: IVec2, charge: f32) -> Entity {
     let pos = grid.cell_to_world(start);
     commands
         .spawn((
-            Ball::new(start),
+            Ball::new(start, charge),
             Sprite::from_color(Color::srgb(1.0, 0.55, 0.2), Vec2::splat(CELL_PX * 0.7)),
             Transform::from_xyz(pos.x, pos.y, 5.0),
         ))
@@ -239,6 +267,9 @@ fn turn(from: Vec2, to: Vec2) -> f32 {
 mod tests {
     use super::*;
 
+    /// Tests start with headroom so runs can begin on flat ground.
+    const TEST_CHARGE: f32 = 10.0;
+
     fn grid() -> Grid {
         Grid::new(Handle::default())
     }
@@ -264,8 +295,8 @@ mod tests {
         let start = disk(&mut grid, 12.0);
         let mut run = Run::default();
         run.route = grid.reachable(start);
-        run.visits.insert(start, START_CHARGE);
-        let mut ball = Ball::new(start);
+        run.visits.insert(start, TEST_CHARGE);
+        let mut ball = Ball::new(start, TEST_CHARGE);
         let mut visited = HashSet::new();
 
         for _ in 0..80 {
@@ -300,8 +331,8 @@ mod tests {
 
         let mut run = Run::default();
         run.route = grid.reachable(start);
-        run.visits.insert(start, START_CHARGE);
-        let mut ball = Ball::new(start);
+        run.visits.insert(start, TEST_CHARGE);
+        let mut ball = Ball::new(start, TEST_CHARGE);
 
         for _ in 0..20 {
             if run.outcome != Outcome::Running {
@@ -326,8 +357,8 @@ mod tests {
 
         let mut run = Run::default();
         run.route = grid.reachable(IVec2::new(0, 0));
-        run.visits.insert(IVec2::new(0, 0), START_CHARGE);
-        let mut ball = Ball::new(IVec2::new(0, 0));
+        run.visits.insert(IVec2::new(0, 0), TEST_CHARGE);
+        let mut ball = Ball::new(IVec2::new(0, 0), TEST_CHARGE);
         ball.dir = IVec2::new(0, 1);
 
         step_once(&mut grid, &mut run, &mut ball);
@@ -346,8 +377,8 @@ mod tests {
         let start = grid.find_start().unwrap();
         let mut run = Run::default();
         run.route = grid.reachable(start);
-        run.visits.insert(start, START_CHARGE);
-        let mut ball = Ball::new(start);
+        run.visits.insert(start, TEST_CHARGE);
+        let mut ball = Ball::new(start, TEST_CHARGE);
 
         let (mut diagonal, mut orthogonal) = (0, 0);
         for _ in 0..40 {

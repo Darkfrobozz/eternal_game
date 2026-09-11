@@ -5,7 +5,7 @@ use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
-use crate::ball::{self, Ball, Outcome, Run, START_CHARGE};
+use crate::ball::{self, Ball, Outcome, Run, Tuning};
 use crate::grid::{CELL_PX, Cell, GRID_H, GRID_W, Grid};
 
 /// Which half of the game is active.
@@ -61,7 +61,7 @@ pub fn setup_grid(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
 
     commands.spawn((
         Text2d::new(
-            "Space: pen / run   Left-drag: draw   Right-drag: erase   Middle-click: place ball   B: auto start   C: clear",
+            "Space: pen / run   Left-drag: draw   Right-drag: erase   Middle-click: place ball   B: auto start   [ ]: start charge   C: clear",
         ),
         TextFont {
             font_size: FontSize::Px(15.0),
@@ -150,6 +150,7 @@ pub fn handle_mode(
     mut grid: ResMut<Grid>,
     mut run: ResMut<Run>,
     placement: Res<Placement>,
+    tuning: Res<Tuning>,
     balls: Query<Entity, With<Ball>>,
 ) {
     if !keys.just_pressed(KeyCode::Space) {
@@ -168,8 +169,8 @@ pub fn handle_mode(
             match chosen {
                 Some(start) => {
                     run.route = grid.reachable(start);
-                    run.visits.insert(start, START_CHARGE);
-                    ball::spawn_ball(&mut commands, &grid, start);
+                    run.visits.insert(start, tuning.start_charge);
+                    ball::spawn_ball(&mut commands, &grid, start, tuning.start_charge);
                 }
                 None => info!("No surface to run on yet — draw something first."),
             }
