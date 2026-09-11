@@ -241,8 +241,12 @@ pub(crate) fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
         return;
     };
 
-    if is_trail {
-        let best_charge = run.visits.get(&next).copied().unwrap_or(f32::INFINITY);
+    // A `Trail` cell is only a loop-closure if the ball actually walked it
+    // (recorded in `visits`). Cells filled in by a turn combo are `Trail` too,
+    // but were never visited, so they are just passed through.
+    if is_trail
+        && let Some(best_charge) = run.visits.get(&next).copied()
+    {
         if ball.charge + f32::EPSILON < best_charge {
             run.outcome = Outcome::Stuck;
             info!(
