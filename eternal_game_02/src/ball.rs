@@ -148,13 +148,13 @@ fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
         }
         let is_trail = grid.get(next) == Some(Cell::Trail);
         let angle = turn(ball.dir.as_vec2(), d.as_vec2());
-        // Prefer, in order: fresh surface, clockwise/straight, a diagonal step
-        // (go as far as possible), then the most clockwise of what remains.
+        // Prefer, in order: fresh surface, a diagonal step (go as far as
+        // possible), clockwise/straight, then the most clockwise of what's left.
         let counterclockwise = if angle > 0.0 { 1.0 } else { 0.0 };
         let orthogonal = if d.x == 0 || d.y == 0 { 1.0 } else { 0.0 };
-        let key = if is_trail { 100.0 } else { 0.0 }
+        let key = if is_trail { 1000.0 } else { 0.0 }
+            + orthogonal * 100.0
             + counterclockwise * 10.0
-            + orthogonal
             + (angle + std::f32::consts::PI) * 0.001;
         if best.is_none_or(|(bk, _, _)| key < bk) {
             best = Some((key, next, is_trail));
@@ -333,5 +333,42 @@ mod tests {
         step_once(&mut grid, &mut run, &mut ball);
         assert_eq!(ball.cell, IVec2::new(1, 1), "should take the diagonal");
         assert_eq!(grid.get(IVec2::new(1, 0)), Some(Cell::Trail));
+    }
+
+    /// On a drawn diagonal, the ball should take diagonal steps rather than
+    /// staircasing (each level step is pure charge loss).
+    #[test]
+    fn diagonal_stroke_prefers_diagonal_steps() {
+        let mut grid = grid();
+        for i in 0..20 {
+            grid.paint(IVec2::new(10 + i, 10 + i), Cell::Solid);
+        }
+        let start = grid.find_start().unwrap();
+        let mut run = Run::default();
+        run.route = grid.reachable(start);
+        run.visits.insert(start, START_CHARGE);
+        let mut ball = Ball::new(start);
+
+        let (mut diagonal, mut orthogonal) = (0, 0);
+        for _ in 0..40 {
+            if run.outcome != Outcome::Running {
+                break;
+            }
+            let from = ball.cell;
+            step_once(&mut grid, &mut run, &mut ball);
+            if run.outcome != Outcome::Running {
+                break;
+            }
+            let d = ball.cell - from;
+            if d.x != 0 && d.y != 0 {
+                diagonal += 1;
+            } else {
+                orthogonal += 1;
+            }
+        }
+        assert!(
+            diagonal > orthogonal,
+            "expected mostly diagonal moves, got diagonal={diagonal} orthogonal={orthogonal}"
+        );
     }
 }
