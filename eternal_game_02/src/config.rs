@@ -16,6 +16,7 @@ use bevy::prelude::*;
 use crate::ball::{Ball, Outcome, Run, Tuning};
 use crate::grid::{CELL_PX, Cell, GRID_H, Grid};
 use crate::paint::{Debug, Mode, Placement};
+use crate::tutorial::Tutorial;
 
 /// Where `Y` writes and `L` / `--replay` read by default.
 pub const CONFIG_PATH: &str = "debug_config.txt";
@@ -163,10 +164,12 @@ pub fn parse(text: &str, image: Handle<Image>) -> Option<(Grid, Option<IVec2>, T
     ))
 }
 
-/// Load a level: parse, then lock every non-empty cell so the geometry can't
-/// be erased (only the player's own strokes can be).
+/// Load a level: parse, recentre it on the board, then lock every non-empty
+/// cell so the geometry can't be erased (only the player's own strokes can be).
 pub fn parse_level(text: &str, image: Handle<Image>) -> Option<(Grid, Option<IVec2>, Tuning)> {
     let (mut grid, place, tuning) = parse(text, image)?;
+    let shift = grid.recenter_solids();
+    let place = place.map(|cell| cell + shift);
     grid.lock_solids();
     Some((grid, place, tuning))
 }
@@ -201,6 +204,15 @@ impl Levels {
         Some(self.files[self.current as usize].clone())
     }
 
+    /// Start again from the first level.
+    pub fn first(&mut self) -> Option<PathBuf> {
+        if self.files.is_empty() {
+            return None;
+        }
+        self.current = 0;
+        Some(self.files[0].clone())
+    }
+
     pub fn label(&self) -> String {
         self.files
             .get(self.current.max(0) as usize)
@@ -209,14 +221,24 @@ impl Levels {
     }
 }
 
+/// A level is a tutorial if its file name says so, e.g. `00_tutorial.txt`.
+fn is_tutorial(path: &Path) -> bool {
+    path.file_name()
+        .map(|name| name.to_string_lossy().to_lowercase().contains("tutorial"))
+        .unwrap_or(false)
+}
+
 /// Replace the running state with the level in `path`.
-fn load_level_into(
+///
+/// Also used by the main menu to start a new game, so it is `pub`.
+pub fn load_level(
     path: &Path,
     grid: &mut Grid,
     place: &mut Placement,
     tuning: &mut Tuning,
     run: &mut Run,
     mode: &mut Mode,
+    tutorial: &mut Tutorial,
 ) {
     let Ok(text) = fs::read_to_string(path) else {
         warn!("Could not read level {}", path.display());
@@ -231,6 +253,7 @@ fn load_level_into(
     *tuning = loaded_tuning;
     *run = Run::default();
     *mode = Mode::Paint;
+    tutorial.set_level(is_tutorial(path));
     info!("Loaded level {}", path.display());
 }
 
@@ -248,16 +271,10 @@ pub fn update_level_text(levels: Res<Levels>, mut texts: Query<&mut Text2d, With
     }
 }
 
-/// Startup: scan `levels/` and load the first one.
-pub fn load_first_level(
-    mut commands: Commands,
-    mut levels: ResMut<Levels>,
-    mut grid: ResMut<Grid>,
-    mut place: ResMut<Placement>,
-    mut tuning: ResMut<Tuning>,
-    mut run: ResMut<Run>,
-    mut mode: ResMut<Mode>,
-) {
+/// Startup: scan `levels/` and spawn the (hidden) level-name label. No level
+/// is loaded yet — the main menu decides whether to start a game or open the
+/// map editor.
+pub fn setup_levels(mut commands: Commands, mut levels: ResMut<Levels>) {
     commands.spawn((
         Text2d::new("Level: -"),
         TextFont {
@@ -271,11 +288,7 @@ pub fn load_first_level(
         Visibility::Hidden,
     ));
     *levels = Levels::scan();
-    if let Some(path) = levels.next() {
-        load_level_into(&path, &mut grid, &mut place, &mut tuning, &mut run, &mut mode);
-    } else {
-        info!("No levels found in levels/");
-    }
+    info!("Found {} level(s) in levels/", levels.files.len());
 }
 
 /// `Tab` loads the next level.
@@ -288,12 +301,21 @@ pub fn cycle_level(
     mut tuning: ResMut<Tuning>,
     mut run: ResMut<Run>,
     mut mode: ResMut<Mode>,
+    mut tutorial: ResMut<Tutorial>,
 ) {
     if !keys.just_pressed(KeyCode::Tab) {
         return;
     }
     if let Some(path) = levels.next() {
-        load_level_into(&path, &mut grid, &mut place, &mut tuning, &mut run, &mut mode);
+        load_level(
+            &path,
+            &mut grid,
+            &mut place,
+            &mut tuning,
+            &mut run,
+            &mut mode,
+            &mut tutorial,
+        );
     }
 }
 

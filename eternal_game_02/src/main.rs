@@ -7,7 +7,10 @@
 mod ball;
 mod config;
 mod grid;
+mod menu;
 mod paint;
+mod screen;
+mod tutorial;
 
 use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;
@@ -17,10 +20,15 @@ use ball::{
     update_ball_transform, update_charge_text,
 };
 use grid::{CELL_PX, GRID_H, GRID_W};
-use config::{Levels, cycle_level, load_first_level, update_level_text};
+use config::{Levels, cycle_level, setup_levels, update_level_text};
+use menu::{Menu, Screen, draw_menu, menu_input, setup_menu};
 use paint::{
     Brush, Debug, Mode, Placement, apply_hud, handle_mode, paint, place_start, report_outcome,
     apply_solids, setup_grid, sync_image, toggle_debug,
+};
+use screen::position_screen_text;
+use tutorial::{
+    Tutorial, apply_tutorial_visibility, draw_tutorial, setup_tutorial, track_tutorial,
 };
 
 fn main() {
@@ -60,15 +68,28 @@ fn main() {
         .init_resource::<Tuning>()
         .init_resource::<Debug>()
         .init_resource::<Levels>()
-        .add_systems(Startup, (setup_grid, load_first_level, setup_camera).chain())
+        .init_resource::<Tutorial>()
+        .init_resource::<Menu>()
+        .init_resource::<Screen>()
+        .add_systems(
+            Startup,
+            (
+                setup_grid,
+                setup_levels,
+                setup_camera,
+                setup_tutorial,
+                setup_menu,
+            )
+                .chain(),
+        )
         .add_systems(
             Update,
             (
                 config::debug_io,
-                cycle_level,
+                cycle_level.run_if(in_play),
                 tune_start_charge,
-                place_start,
-                handle_mode,
+                place_start.run_if(in_play),
+                handle_mode.run_if(in_play),
                 paint.run_if(in_paint_mode),
                 apply_solids,
                 step_ball.run_if(in_run_mode),
@@ -79,12 +100,27 @@ fn main() {
                 draw_itinerary,
                 update_charge_text,
                 update_level_text,
-                toggle_debug,
+                toggle_debug.run_if(in_play),
                 apply_hud,
                 report_outcome,
-                camera_controls,
+                camera_controls.run_if(in_play),
             )
                 .chain(),
+        )
+        // Screen-space labels and the tutorial read input and react to the
+        // camera, so they run after it has been moved this frame.
+        .add_systems(
+            Update,
+            (
+                track_tutorial,
+                draw_tutorial,
+                apply_tutorial_visibility,
+                menu_input,
+                draw_menu,
+                position_screen_text,
+            )
+                .chain()
+                .after(camera_controls),
         )
         .run();
 }
@@ -93,12 +129,17 @@ fn setup_camera(mut commands: Commands) {
     commands.spawn(Camera2d);
 }
 
-fn in_paint_mode(mode: Res<Mode>) -> bool {
-    *mode == Mode::Paint
+fn in_paint_mode(mode: Res<Mode>, screen: Res<Screen>) -> bool {
+    *mode == Mode::Paint && *screen != Screen::Menu
 }
 
-fn in_run_mode(mode: Res<Mode>) -> bool {
-    *mode == Mode::Run
+fn in_run_mode(mode: Res<Mode>, screen: Res<Screen>) -> bool {
+    *mode == Mode::Run && *screen != Screen::Menu
+}
+
+/// True while a game or the map editor is showing (i.e. not the title menu).
+fn in_play(screen: Res<Screen>) -> bool {
+    *screen != Screen::Menu
 }
 
 /// Scroll to zoom, WASD to pan. Keeps the full grid available while letting you

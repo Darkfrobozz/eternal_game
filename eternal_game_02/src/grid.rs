@@ -103,6 +103,37 @@ impl Grid {
         }
     }
 
+    /// Shift every solid so the solid bounding box is centred on the board,
+    /// and return the shift applied (so a placed start can follow it).
+    ///
+    /// This lets a level be drawn anywhere in the editor and still appear
+    /// centred when it is loaded. The board's centre sits between cells
+    /// `(w-1)/2` and `w/2`, so doubled coordinates are used to avoid a
+    /// rounding bias.
+    pub fn recenter_solids(&mut self) -> IVec2 {
+        if self.solids.is_empty() {
+            return IVec2::ZERO;
+        }
+        let mut min = IVec2::splat(i32::MAX);
+        let mut max = IVec2::splat(i32::MIN);
+        for solid in &self.solids {
+            min = min.min(*solid);
+            max = max.max(*solid);
+        }
+        let bbox_centre2 = min + max;
+        let board_centre2 = IVec2::new(self.w - 1, self.h - 1);
+        let shift = IVec2::new(
+            ((board_centre2.x - bbox_centre2.x) as f32 / 2.0).round() as i32,
+            ((board_centre2.y - bbox_centre2.y) as f32 / 2.0).round() as i32,
+        );
+        if shift != IVec2::ZERO {
+            self.solids = self.solids.iter().map(|solid| *solid + shift).collect();
+            self.solids_dirty = true;
+            self.regenerate_surfaces();
+        }
+        shift
+    }
+
     /// Rebuild every derived surface cell from `solids`. Cheap enough to run
     /// whenever the matrix is dirty.
     pub fn regenerate_surfaces(&mut self) {
@@ -363,6 +394,29 @@ mod tests {
     fn paint(grid: &mut Grid, cell: IVec2, value: Cell) {
         grid.paint(cell, value);
         grid.regenerate_surfaces();
+    }
+
+    /// A level drawn off-centre is recentred on the board by the loader.
+    #[test]
+    fn recenter_solids_centres_the_bounding_box() {
+        let mut grid = grid();
+        for y in 10..14 {
+            for x in 10..14 {
+                grid.set(IVec2::new(x, y), Cell::Solid);
+            }
+        }
+        grid.rebuild_surface();
+
+        let shift = grid.recenter_solids();
+
+        // A 4x4 block drawn at 10..13 recentres exactly on a 160x120 board.
+        assert_eq!(shift, IVec2::new(68, 48));
+        let xs = grid.solids.iter().map(|c| c.x);
+        let ys = grid.solids.iter().map(|c| c.y);
+        assert_eq!((xs.clone().min(), xs.max()), (Some(78), Some(81)));
+        assert_eq!((ys.clone().min(), ys.max()), (Some(58), Some(61)));
+        // Surface was regenerated around the new position.
+        assert!(grid.count(Cell::Surface) > 0);
     }
 
     #[test]

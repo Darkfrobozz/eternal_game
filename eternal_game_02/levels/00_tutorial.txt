@@ -1,0 +1,14 @@
+# eternal_game_02 config v2
+start_charge 0
+place 79 62
+origin 78 55
+grid 4 9
+##.#
+#..#
+#..#
+#..#
+#..#
+#..#
+#..#
+#..#
+####

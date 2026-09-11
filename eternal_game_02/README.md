@@ -51,6 +51,19 @@ Cell values in the array: `0` empty, `1` solid (painted by the pen), `2` surface
 
 ## Controls
 
+### Title menu
+
+The game opens on a small title menu:
+
+- **New Game** loads the first level (currently the tutorial). `Up`/`Down` or
+  `W`/`S` move the cursor, `1`/`2` pick directly, `Enter`/`Space` confirm.
+- **Map Editor** opens a blank board with the editor HUD on (see the
+  [map editor workflow](#map-editor-workflow)).
+- `Esc` clears the board and returns to the title menu (in the editor, press
+  `Y` to save first — `Esc` does not auto-save).
+
+### Playing
+
 Normal (play-only): `Space` pen / run, left-drag draws solids, right-drag
 erases, `C` clears. The charge readout and controller hint are hidden; the
 player infers charge from the arrows (green accumulates, orange consumes) and
@@ -72,9 +85,54 @@ locked — but since it is derived, erasing a surface cell is a no-op anyway).
 `Tab` cycles levels; the debug HUD shows the current file name. A level's
 `place` and `start_charge` are its starting condition.
 
+A level is positioned wherever its cells sit in the 160×120 board. The camera
+opens centred on the board centre, so to centre a level on screen its **solid
+bounding box** must be centred on cell `(79.5, 59.5)`. `origin` is only the
+crop offset used when saving; it does not place the level. Copying
+`debug_config.txt` into `levels/` keeps the drawn coordinates, so recentre the
+cells if you want it in the middle.
+
 - `levels/01.txt` — a plain vertical wall. **Currently impossible** (see
   Handoff).
 - `levels/02.txt` — a descending spiral that closes net-positive and wins.
+- `levels/00_tutorial.txt` — a hollow box with one block missing from the top
+  wall. The ball starts inside and falls out through the gap (`Stuck`), until
+  the player draws the missing block, after which it completes a net-zero lap
+  and wins. A file whose name contains `tutorial` (case-insensitive) switches
+  on the guided control tutorial.
+
+## Tutorial
+
+The tutorial is attached to any level file whose name contains `tutorial`.
+Loading such a level activates [`Tutorial`](src/tutorial.rs), which walks the
+player through five objectives:
+
+1. draw on the grid (left-click and drag),
+2. `Space` to start rolling the ball,
+3. the scroll wheel to zoom,
+4. `W`/`A`/`S`/`D` to pan,
+5. make the ball loop forever (a `Won` run).
+
+Drawing is detected as any solid the level did not lock, and looping as
+`run.outcome == Outcome::Won`. Objectives can be completed in any order; each
+is latched and skipped once met. The prompt is a `Text2d` pinned to the
+top-left with `ScreenText`, so it stays readable while the player is zooming
+and panning. Tab away and the tutorial deactivates; tab back and it restarts.
+
+## Map editor workflow
+
+Choose **Map Editor** from the title menu. The board starts blank and the
+debug HUD is on, so the full editor is available:
+
+- left-drag draws solids, right-drag erases, `C` clears;
+- middle-click places the ball's start, `B` reverts to the automatic start;
+- `[` / `]` set the starting charge;
+- `Y` writes the board to `debug_config.txt`, `L` loads it back;
+- `Esc` clears the board and returns to the title menu, so save first.
+
+To turn a draft into a level, press `Y`, then copy `debug_config.txt` into
+`levels/NN.txt` (it is already in the config format; `parse_level` locks the
+file's solids on load). Give it a `tutorial` name to attach the walkthrough.
 
 ## Debugging / replay
 
@@ -105,6 +163,10 @@ old full-grid files (no `origin`).
 ### Code map
 
 - `src/main.rs` — app wiring, window, camera zoom/pan, `--replay` entry point.
+- `src/menu.rs` — title menu and the top-level `Screen` (Menu/Game/Editor).
+- `src/screen.rs` — `ScreenText`, a `Text2d` pinned to the window through
+  zoom/pan (used by the menu and tutorial).
+- `src/tutorial.rs` — the three-step control tutorial.
 - `src/grid.rs` — `Grid` (cells, `solids`, `locked`, image), painting, surface
   regeneration, reachability, coordinate helpers, solid components.
 - `src/ball.rs` — `Ball`, `Run`, `Tuning`, movement + charge, arrows, battery
@@ -124,6 +186,10 @@ old full-grid files (no `origin`).
    `Grid.locked`; the pen is always allowed.
 4. **The HUD is hidden by default.** Only `H` reveals charge/controls; the game
    communicates charge through arrows + ball colour.
+5. **Screen text is pinned, not UI.** The project deliberately keeps the `2d`
+   feature set and avoids `bevy_ui`. `ScreenText` keeps the menu and tutorial
+   legible under camera zoom/pan by re-reading the camera every frame and
+   compensating position and scale.
 
 ### Known issues / open questions
 
