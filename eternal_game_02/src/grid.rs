@@ -8,7 +8,7 @@
 //! `0 Empty`, `1 Solid` (pen), `2 Surface` (auto-generated track), `3 Trail`.
 
 use bevy::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Grid width in cells.
 pub const GRID_W: i32 = 160;
@@ -119,6 +119,7 @@ impl Grid {
     }
 
     /// Solid cells adjacent to both `a` and `b` — the contour(s) they share.
+    #[cfg(test)]
     pub fn common_solids(&self, a: IVec2, b: IVec2) -> Vec<IVec2> {
         NEIGHBORS8
             .iter()
@@ -230,6 +231,34 @@ impl Grid {
             }
         }
         seen
+    }
+
+    /// Label every solid cell with an 8-connected component id. The ball uses
+    /// this to stay on one connected mass instead of hopping between them.
+    pub fn solid_components(&self) -> HashMap<IVec2, usize> {
+        let mut labels: HashMap<IVec2, usize> = HashMap::new();
+        let mut next_id = 0;
+        for y in 0..self.h {
+            for x in 0..self.w {
+                let seed = IVec2::new(x, y);
+                if self.get(seed) != Some(Cell::Solid) || labels.contains_key(&seed) {
+                    continue;
+                }
+                labels.insert(seed, next_id);
+                let mut stack = vec![seed];
+                while let Some(cell) = stack.pop() {
+                    for d in NEIGHBORS8 {
+                        let n = cell + d;
+                        if self.get(n) == Some(Cell::Solid) && !labels.contains_key(&n) {
+                            labels.insert(n, next_id);
+                            stack.push(n);
+                        }
+                    }
+                }
+                next_id += 1;
+            }
+        }
+        labels
     }
 
     /// The topmost surface cell (tie-break: leftmost) — the default start.

@@ -41,9 +41,9 @@ pub struct Ball {
     pub cell: IVec2,
     pub dir: IVec2,
     pub charge: f32,
-    /// Solid cell the ball is currently following. Keeps it on one contour
+    /// Connected solid mass the ball is following. Keeps it on one contour
     /// when two lines run close enough for their surfaces to touch.
-    pub anchor: Option<IVec2>,
+    pub component: Option<usize>,
     timer: f32,
 }
 
@@ -53,7 +53,7 @@ impl Ball {
             cell,
             dir: IVec2::X,
             charge,
-            anchor: None,
+            component: None,
             timer: 0.0,
         }
     }
@@ -80,6 +80,8 @@ pub enum Outcome {
 pub struct Run {
     pub visits: HashMap<IVec2, f32>,
     pub route: HashSet<IVec2>,
+    /// Every solid cell labelled with its 8-connected component id.
+    pub components: HashMap<IVec2, usize>,
     pub outcome: Outcome,
 }
 
@@ -164,10 +166,23 @@ fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
     let from = ball.cell;
     let behind = from - ball.dir;
 
+    // Work out which connected solid mass we are following (first move only).
+    if ball.component.is_none() {
+        ball.component = NEIGHBORS8
+            .iter()
+            .find_map(|offset| run.components.get(&(from + *offset)).copied());
+        if ball.component.is_none() {
+            run.outcome = Outcome::Stuck;
+            info!("Ball at {from:?} has no adjacent solid to follow");
+            return;
+        }
+    }
+    let component = ball.component.unwrap();
+
     // Pick the most clockwise (rightmost) neighbour on the route, never
     // doubling back and never cutting a wall corner. Fresh surface always
     // beats re-entering the trail.
-    let mut best: Option<(f32, IVec2, bool, IVec2)> = None; // key, cell, is_trail, anchor
+    let mut best: Option<(f32, IVec2, bool)> = None; // key, cell, is_trail
     for d in NEIGHBORS8 {
         let next = ball.cell + d;
         if next == behind
@@ -178,20 +193,14 @@ fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
             continue;
         }
 
-        // Stay on the contour we are already following: the solid shared with
-        // the next cell has to be next to the current anchor.
-        let shared = grid.common_solids(ball.cell, next);
-        let anchor = match ball.anchor {
-            None => match shared.first() {
-                Some(solid) => *solid,
-                None => continue,
-            },
-            Some(current) => match shared.iter().copied().find(|s| chebyshev(*s, current) <= 1)
-            {
-                Some(solid) => solid,
-                None => continue,
-            },
-        };
+        // Stay on the solid component we are following: the destination must
+        // still hug that same mass.
+        let on_component = NEIGHBORS8
+            .iter()
+            .any(|offset| run.components.get(&(next + *offset)) == Some(&component));
+        if !on_component {
+            continue;
+        }
 
         let is_trail = grid.get(next) == Some(Cell::Trail);
         let angle = turn(ball.dir.as_vec2(), d.as_vec2());
@@ -203,17 +212,16 @@ fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
             + orthogonal * 100.0
             + counterclockwise * 10.0
             + (angle + std::f32::consts::PI) * 0.001;
-        if best.is_none_or(|(bk, _, _, _)| key < bk) {
-            best = Some((key, next, is_trail, anchor));
+        if best.is_none_or(|(bk, _, _)| key < bk) {
+            best = Some((key, next, is_trail));
         }
     }
 
-    let Some((_, next, is_trail, anchor)) = best else {
+    let Some((_, next, is_trail)) = best else {
         run.outcome = Outcome::Stuck;
         info!("Ball stuck at {:?}: no track ahead", ball.cell);
         return;
     };
-    ball.anchor = Some(anchor);
 
     if is_trail {
         let best_charge = run.visits.get(&next).copied().unwrap_or(f32::INFINITY);
@@ -293,11 +301,6 @@ fn turn(from: Vec2, to: Vec2) -> f32 {
     cross.atan2(dot)
 }
 
-/// Chebyshev (king-move) distance between two cells.
-fn chebyshev(a: IVec2, b: IVec2) -> i32 {
-    (a.x - b.x).abs().max((a.y - b.y).abs())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,6 +333,7 @@ mod tests {
         let start = disk(&mut grid, 12.0);
         let mut run = Run::default();
         run.route = grid.reachable(start);
+        run.components = grid.solid_components();
         run.visits.insert(start, TEST_CHARGE);
         let mut ball = Ball::new(start, TEST_CHARGE);
         let mut visited = HashSet::new();
@@ -370,10 +374,11 @@ mod tests {
 
         let mut run = Run::default();
         run.route = grid.reachable(IVec2::new(1, 20));
+        run.components = grid.solid_components();
         run.visits.insert(IVec2::new(1, 20), TEST_CHARGE);
         let mut ball = Ball::new(IVec2::new(1, 20), TEST_CHARGE);
         ball.dir = IVec2::new(0, 1); // heading up
-        ball.anchor = Some(IVec2::new(0, 20)); // following the left line
+        ball.component = run.components.get(&IVec2::new(0, 20)).copied(); // left line
 
         step_once(&mut grid, &mut run, &mut ball);
         assert!(ball.cell.x <= 1, "hopped to the right line: {:?}", ball.cell);
@@ -392,6 +397,7 @@ mod tests {
 
         let mut run = Run::default();
         run.route = grid.reachable(start);
+        run.components = grid.solid_components();
         run.visits.insert(start, TEST_CHARGE);
         let mut ball = Ball::new(start, TEST_CHARGE);
 
@@ -418,6 +424,7 @@ mod tests {
 
         let mut run = Run::default();
         run.route = grid.reachable(IVec2::new(0, 0));
+        run.components = grid.solid_components();
         run.visits.insert(IVec2::new(0, 0), TEST_CHARGE);
         let mut ball = Ball::new(IVec2::new(0, 0), TEST_CHARGE);
         ball.dir = IVec2::new(0, 1);
@@ -437,6 +444,7 @@ mod tests {
 
         let mut run = Run::default();
         run.route = grid.reachable(IVec2::new(10, 11));
+        run.components = grid.solid_components();
         run.visits.insert(IVec2::new(10, 11), TEST_CHARGE);
         let mut ball = Ball::new(IVec2::new(10, 11), TEST_CHARGE);
         ball.dir = IVec2::new(0, 1);
@@ -458,6 +466,7 @@ mod tests {
         let start = grid.find_start().unwrap();
         let mut run = Run::default();
         run.route = grid.reachable(start);
+        run.components = grid.solid_components();
         run.visits.insert(start, TEST_CHARGE);
         let mut ball = Ball::new(start, TEST_CHARGE);
 

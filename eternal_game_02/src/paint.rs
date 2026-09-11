@@ -169,6 +169,7 @@ pub fn handle_mode(
             match chosen {
                 Some(start) => {
                     run.route = grid.reachable(start);
+                    run.components = grid.solid_components();
                     run.visits.insert(start, tuning.start_charge);
                     ball::spawn_ball(&mut commands, &grid, start, tuning.start_charge);
                 }
