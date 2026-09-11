@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 
-use crate::grid::{CELL_PX, Cell, GRID_H, Grid, NEIGHBORS8};
+use crate::grid::{CELL_PX, Cell, GRID_H, Grid, NEIGHBORS4, NEIGHBORS8};
 
 /// Movement steps per second.
 pub const STEPS_PER_SECOND: f32 = 6.0;
@@ -44,6 +44,9 @@ pub struct Ball {
     /// Connected solid mass the ball is following. Keeps it on one contour
     /// when two lines run close enough for their surfaces to touch.
     pub component: Option<usize>,
+    /// Whether the ball has made a real move yet (so the first heading isn't
+    /// mistaken for a previous direction when detecting turn combos).
+    moved: bool,
     timer: f32,
 }
 
@@ -54,6 +57,7 @@ impl Ball {
             dir: IVec2::X,
             charge,
             component: None,
+            moved: false,
             timer: 0.0,
         }
     }
@@ -178,18 +182,15 @@ fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
         }
     }
     let component = ball.component.unwrap();
+    let previous_dir = ball.moved.then_some(ball.dir);
 
-    // Pick the most clockwise (rightmost) neighbour on the route, never
-    // doubling back and never cutting a wall corner. Fresh surface always
-    // beats re-entering the trail.
+    // Movement is orthogonal only. Follow the contour with a right-hand rule:
+    // take a right turn (clockwise) if one exists, else go straight, else left,
+    // never reversing.
     let mut best: Option<(f32, IVec2, bool)> = None; // key, cell, is_trail
-    for d in NEIGHBORS8 {
+    for d in NEIGHBORS4 {
         let next = ball.cell + d;
-        if next == behind
-            || !grid.is_track(next)
-            || grid.step_blocked(ball.cell, d)
-            || !run.route.contains(&next)
-        {
+        if next == behind || !grid.is_track(next) || !run.route.contains(&next) {
             continue;
         }
 
@@ -204,12 +205,9 @@ fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
 
         let is_trail = grid.get(next) == Some(Cell::Trail);
         let angle = turn(ball.dir.as_vec2(), d.as_vec2());
-        // Prefer, in order: fresh surface, a diagonal step (go as far as
-        // possible), clockwise/straight, then the most clockwise of what's left.
+        // Prefer: fresh surface, then clockwise (right) over straight over left.
         let counterclockwise = if angle > 0.0 { 1.0 } else { 0.0 };
-        let orthogonal = if d.x == 0 || d.y == 0 { 1.0 } else { 0.0 };
         let key = if is_trail { 1000.0 } else { 0.0 }
-            + orthogonal * 100.0
             + counterclockwise * 10.0
             + (angle + std::f32::consts::PI) * 0.001;
         if best.is_none_or(|(bk, _, _)| key < bk) {
@@ -261,27 +259,20 @@ fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
     }
     ball.dir = d;
     ball.cell = next;
+    ball.moved = true;
     run.visits.entry(next).or_insert(ball.charge);
 
-    // If we cut a diagonal, also consume the two orthogonal "staircase" cells
-    // between the endpoints, so the parallel representation of this contour
-    // piece is filled too and no stray 2s are left behind. Those covered cells
-    // count as distance travelled, so they feed the charge as well.
-    if d.x != 0 && d.y != 0 {
-        // Filled cells count as distance travelled and share the sign of the
-        // move: a descending diagonal accumulates them, climbing/level consumes.
-        let fill = if d.y < 0 { CHARGE_PER_CELL } else { -CHARGE_PER_CELL };
-        for corner in [from + IVec2::new(d.x, 0), from + IVec2::new(0, d.y)] {
-            if grid.is_track(corner) {
-                grid.set(corner, Cell::Trail);
-                ball.charge += fill;
-            }
+    // A 90-degree turn is the orthogonal encoding of a diagonal step. Add the
+    // +1 correction that makes the two orthogonal moves cost exactly what the
+    // diagonal would, and fill the skipped 2x2 corner as trail.
+    if let Some(previous) = previous_dir
+        && d.x * previous.x + d.y * previous.y == 0
+    {
+        let skipped = from - previous + d;
+        if grid.is_track(skipped) {
+            grid.set(skipped, Cell::Trail);
         }
-        if ball.charge < 0.0 {
-            ball.charge = 0.0;
-            run.outcome = Outcome::Stuck;
-            info!("Ball ran out of charge at {:?}", ball.cell);
-        }
+        ball.charge += CHARGE_PER_CELL;
     }
 }
 
@@ -415,34 +406,32 @@ mod tests {
         assert_eq!(ball.dir, IVec2::X); // still facing forward
     }
 
-    /// A diagonal is taken when an orthogonal path exists through a surface
-    /// corner — even if the other corner is solid.
+    /// A 90-degree turn encodes a diagonal: its two orthogonal steps cost
+    /// exactly what the diagonal would (here up-right = -1).
     #[test]
-    fn diagonal_with_a_path_is_taken() {
+    fn turn_combo_matches_a_diagonal() {
         let mut grid = grid();
-        grid.set(IVec2::new(0, 1), Cell::Solid);
-        grid.set(IVec2::new(0, 0), Cell::Surface);
-        grid.set(IVec2::new(1, 0), Cell::Surface);
-        grid.set(IVec2::new(1, 1), Cell::Surface);
+        grid.set(IVec2::new(5, 5), Cell::Solid);
+        grid.set(IVec2::new(4, 5), Cell::Surface);
+        grid.set(IVec2::new(4, 6), Cell::Surface);
+        grid.set(IVec2::new(5, 6), Cell::Surface);
 
         let mut run = Run::default();
-        run.route = grid.reachable(IVec2::new(0, 0));
+        run.route = grid.reachable(IVec2::new(4, 5));
         run.components = grid.solid_components();
-        run.visits.insert(IVec2::new(0, 0), TEST_CHARGE);
-        let mut ball = Ball::new(IVec2::new(0, 0), TEST_CHARGE);
+        run.visits.insert(IVec2::new(4, 5), TEST_CHARGE);
+        let mut ball = Ball::new(IVec2::new(4, 5), TEST_CHARGE);
         ball.dir = IVec2::new(0, 1);
 
         step_once(&mut grid, &mut run, &mut ball);
-        assert_eq!(ball.cell, IVec2::new(1, 1), "should take the diagonal");
-        assert_eq!(grid.get(IVec2::new(1, 0)), Some(Cell::Trail));
-        // Climbing diagonal (spend 1) plus the consumed fill (spend 1).
-        assert_eq!(ball.charge, TEST_CHARGE - 2.0);
+        step_once(&mut grid, &mut run, &mut ball);
+        assert_eq!(ball.cell, IVec2::new(5, 6));
+        assert_eq!(ball.charge, TEST_CHARGE - 1.0);
     }
 
-    /// With no surface corner there is no orthogonal path, so the diagonal is
-    /// blocked.
+    /// With no orthogonal move available the ball stops and never reverses.
     #[test]
-    fn diagonal_without_a_path_is_blocked() {
+    fn stuck_when_no_orthogonal_move() {
         let mut grid = grid();
         grid.set(IVec2::new(10, 10), Cell::Solid);
         grid.set(IVec2::new(10, 11), Cell::Surface);
@@ -457,44 +446,6 @@ mod tests {
 
         step_once(&mut grid, &mut run, &mut ball);
         assert_eq!(run.outcome, Outcome::Stuck);
-    }
-
-    /// A drawn diagonal is walked with diagonal steps again, now that a single
-    /// surface corner is enough to permit them.
-    #[test]
-    fn diagonal_stroke_prefers_diagonal_steps() {
-        let mut grid = grid();
-        for i in 0..20 {
-            grid.paint(IVec2::new(10 + i, 10 + i), Cell::Solid);
-        }
-        let start = grid.find_start().unwrap();
-        let mut run = Run::default();
-        run.route = grid.reachable(start);
-        run.components = grid.solid_components();
-        run.visits.insert(start, TEST_CHARGE);
-        let mut ball = Ball::new(start, TEST_CHARGE);
-
-        let (mut diagonal, mut orthogonal) = (0, 0);
-        for _ in 0..40 {
-            if run.outcome != Outcome::Running {
-                break;
-            }
-            let from = ball.cell;
-            step_once(&mut grid, &mut run, &mut ball);
-            if run.outcome != Outcome::Running {
-                break;
-            }
-            let d = ball.cell - from;
-            if d.x != 0 && d.y != 0 {
-                diagonal += 1;
-            } else {
-                orthogonal += 1;
-            }
-        }
-        assert!(
-            diagonal > orthogonal,
-            "expected mostly diagonal moves, got diagonal={diagonal} orthogonal={orthogonal}"
-        );
     }
 }
 

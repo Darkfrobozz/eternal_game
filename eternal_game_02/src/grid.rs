@@ -31,6 +31,15 @@ pub const NEIGHBORS8: [IVec2; 8] = [
     IVec2::new(1, -1),
 ];
 
+/// The four orthogonal neighbours. Ball movement is orthogonal only; a diagonal
+/// is represented as a combo of two of these.
+pub const NEIGHBORS4: [IVec2; 4] = [
+    IVec2::new(1, 0),
+    IVec2::new(0, 1),
+    IVec2::new(-1, 0),
+    IVec2::new(0, -1),
+];
+
 /// What occupies a cell.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Cell {
@@ -101,41 +110,6 @@ impl Grid {
         matches!(self.get(cell), Some(Cell::Surface) | Some(Cell::Trail))
     }
 
-    /// A diagonal step is possible only when at least one of its two orthogonal
-    /// corner cells is a real surface (`2`) cell — i.e. an orthogonal path to
-    /// the same spot exists. Solids, trails, and the void provide no such path,
-    /// so a diagonal that would cut a corner or leap a gap is blocked.
-    pub fn step_blocked(&self, from: IVec2, dir: IVec2) -> bool {
-        if dir.x == 0 || dir.y == 0 {
-            return false;
-        }
-        let a = self.get(from + IVec2::new(dir.x, 0));
-        let b = self.get(from + IVec2::new(0, dir.y));
-        a != Some(Cell::Surface) && b != Some(Cell::Surface)
-    }
-
-    /// Solid cells adjacent to both `a` and `b` — the contour(s) they share.
-    #[cfg(test)]
-    pub fn common_solids(&self, a: IVec2, b: IVec2) -> Vec<IVec2> {
-        NEIGHBORS8
-            .iter()
-            .filter_map(|offset| {
-                let solid = a + *offset;
-                if self.get(solid) != Some(Cell::Solid) {
-                    return None;
-                }
-                let d = solid - b;
-                (d.x.abs() <= 1 && d.y.abs() <= 1).then_some(solid)
-            })
-            .collect()
-    }
-
-    /// True when `a` and `b` are both adjacent to some common solid cell.
-    #[cfg(test)]
-    pub fn shares_solid(&self, a: IVec2, b: IVec2) -> bool {
-        !self.common_solids(a, b).is_empty()
-    }
-
     /// The pen. `Cell::Solid` lays down a `1` and grows `2` surface on every
     /// adjacent empty cell; `Cell::Empty` erases and cleans up surface that no
     /// longer touches any solid.
@@ -203,9 +177,8 @@ impl Grid {
         self.dirty = true;
     }
 
-    /// Flood fill the track reachable from `start`, respecting the no-corner-
-    /// cutting rule. This is the ball's route: cells across a wall are in a
-    /// different component and are never touched.
+    /// Flood fill the orthogonal track reachable from `start`. This is the
+    /// ball's route.
     pub fn reachable(&self, start: IVec2) -> HashSet<IVec2> {
         let mut seen = HashSet::new();
         if !self.is_track(start) {
@@ -214,12 +187,9 @@ impl Grid {
         seen.insert(start);
         let mut stack = vec![start];
         while let Some(cell) = stack.pop() {
-            for d in NEIGHBORS8 {
+            for d in NEIGHBORS4 {
                 let next = cell + d;
-                if seen.contains(&next)
-                    || !self.is_track(next)
-                    || self.step_blocked(cell, d)
-                {
+                if seen.contains(&next) || !self.is_track(next) {
                     continue;
                 }
                 seen.insert(next);
@@ -353,47 +323,15 @@ mod tests {
         assert_eq!(grid.count(Cell::Surface), 25 - 9);
     }
 
-    /// Two solids meeting at a corner must not let the track leak through the
-    /// diagonal gap between them.
+    /// Reachability is orthogonal-only now, so a diagonal pair is not connected.
     #[test]
-    fn diagonal_wall_is_not_cut() {
-        let mut grid = grid();
-        grid.set(IVec2::new(0, 0), Cell::Solid);
-        grid.set(IVec2::new(1, 1), Cell::Solid);
-        grid.set(IVec2::new(1, 0), Cell::Surface);
-        grid.set(IVec2::new(0, 1), Cell::Surface);
-
-        assert!(grid.step_blocked(IVec2::new(1, 0), IVec2::new(-1, 1)));
-        let route = grid.reachable(IVec2::new(1, 0));
-        assert!(!route.contains(&IVec2::new(0, 1)));
-    }
-
-    /// An open diagonal through empty corners is blocked too: a diagonal needs
-    /// real `2` path cells on both corners.
-    #[test]
-    fn open_diagonal_is_blocked_by_void_corners() {
+    fn reachable_is_orthogonal() {
         let mut grid = grid();
         grid.set(IVec2::new(1, 0), Cell::Surface);
         grid.set(IVec2::new(0, 1), Cell::Surface);
 
-        assert!(grid.step_blocked(IVec2::new(1, 0), IVec2::new(-1, 1)));
         let route = grid.reachable(IVec2::new(1, 0));
+        assert!(route.contains(&IVec2::new(1, 0)));
         assert!(!route.contains(&IVec2::new(0, 1)));
-    }
-
-    /// Two facing walls are separate contours even where their surfaces touch.
-    #[test]
-    fn parallel_walls_do_not_share_a_contour() {
-        let mut grid = grid();
-        for y in 10..20 {
-            grid.set(IVec2::new(0, y), Cell::Solid);
-            grid.set(IVec2::new(3, y), Cell::Solid);
-            grid.set(IVec2::new(1, y), Cell::Surface);
-            grid.set(IVec2::new(2, y), Cell::Surface);
-        }
-        // Sideways hop between the two walls' surfaces is not the same contour.
-        assert!(!grid.shares_solid(IVec2::new(1, 15), IVec2::new(2, 15)));
-        // But continuing along one wall is.
-        assert!(grid.shares_solid(IVec2::new(1, 15), IVec2::new(1, 16)));
     }
 }
