@@ -38,15 +38,18 @@ Cell values in the array: `0` empty, `1` solid (painted by the pen), `2` surface
 
 ## Controls
 
-- `Space` pen / run; left-drag draw; right-drag erase; `C` clear.
-- Middle-click places the ball; `B` returns to the automatic start.
-- `[` / `]` adjust the starting charge.
-- `M` toggles auto / manual stepping; in manual mode `N` advances one step.
-- The ball is a battery: grey when depleted, shifting hue as it charges.
-- `H` toggles the debug HUD. It is hidden in the game (no charge readout); the
-  player is meant to infer the charge relation from the arrows.
-- Each step leaves an **arrow** showing the direction moved: **green** if the
-  step accumulated charge, **orange** if it consumed.
+Normal (play-only): `Space` pen / run, left-drag draws solids, right-drag
+erases, `C` clears. The charge readout and controller hint are hidden; the
+player infers charge from the arrows (green accumulates, orange consumes) and
+the ball's battery colour (grey when depleted, hue shifting as it charges).
+
+`H` toggles **debug / map-editor mode**, which shows the HUD and enables:
+
+- Middle-click places the start; `B` clears it back to the automatic start.
+- `[` / `]` adjust the start charge.
+- `M` toggles auto / manual stepping; `N` steps once while manual.
+- `Y` / `L` save / load `debug_config.txt`.
+- Scroll wheel zooms, WASD pans.
 
 ## Debugging / replay
 
