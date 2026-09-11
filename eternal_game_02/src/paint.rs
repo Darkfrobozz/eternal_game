@@ -266,6 +266,7 @@ fn leave_run(
 pub fn sync_image(
     mut grid: ResMut<Grid>,
     tile: Res<SolidTile>,
+    debug: Res<Debug>,
     mut images: ResMut<Assets<Image>>,
 ) {
     if !grid.dirty {
@@ -300,6 +301,13 @@ pub fn sync_image(
         let top = ((grid.h - 1 - y) as usize) * tex;
         for x in 0..grid.w {
             let cell = grid.cells[(y * grid.w + x) as usize];
+            // Surface and trail are debug-only: outside debug they read as
+            // empty, so the player only sees the solids they drew.
+            let shown = if !debug.0 && matches!(cell, Cell::Surface | Cell::Trail) {
+                Cell::Empty
+            } else {
+                cell
+            };
             let col = x as usize * tex;
 
             // A `None` means "copy the metal tile"; otherwise fill the whole
@@ -310,11 +318,11 @@ pub fn sync_image(
                 let distance = (dx * dx + dy * dy).sqrt();
                 let normalised = (distance / radius).clamp(0.0, 1.0);
                 let local = ((dissolve - normalised * 0.6) / 0.4).clamp(0.0, 1.0);
-                Some(Grid::dissolve_color(cell, local))
-            } else if cell == Cell::Solid && tile_px.is_some() {
+                Some(Grid::dissolve_color(shown, local))
+            } else if shown == Cell::Solid && tile_px.is_some() {
                 None
             } else {
-                Some(Grid::color(cell))
+                Some(Grid::color(shown))
             };
 
             if let Some(color) = flat {
@@ -397,9 +405,11 @@ pub fn report_outcome(run: Res<Run>, mut reported: Local<bool>, mut solved: Loca
 }
 
 /// `H` toggles debug / map-editor mode.
-pub fn toggle_debug(keys: Res<ButtonInput<KeyCode>>, mut debug: ResMut<Debug>) {
+pub fn toggle_debug(keys: Res<ButtonInput<KeyCode>>, mut debug: ResMut<Debug>, mut grid: ResMut<Grid>) {
     if keys.just_pressed(KeyCode::KeyH) {
         debug.0 = !debug.0;
+        // Surface/trail visibility follows debug mode, so re-bake the grid.
+        grid.dirty = true;
     }
 }
 
