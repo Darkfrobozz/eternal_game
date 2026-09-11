@@ -237,12 +237,22 @@ fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
 
     // If we cut a diagonal, also consume the two orthogonal "staircase" cells
     // between the endpoints, so the parallel representation of this contour
-    // piece is filled too and no stray 2s are left behind.
+    // piece is filled too and no stray 2s are left behind. Those covered cells
+    // count as distance travelled, so they feed the charge as well.
     if d.x != 0 && d.y != 0 {
+        // Filled cells count as distance travelled and share the sign of the
+        // move: a descending diagonal accumulates them, climbing/level consumes.
+        let fill = if d.y < 0 { CHARGE_PER_CELL } else { -CHARGE_PER_CELL };
         for corner in [from + IVec2::new(d.x, 0), from + IVec2::new(0, d.y)] {
             if grid.is_track(corner) {
                 grid.set(corner, Cell::Trail);
+                ball.charge += fill;
             }
+        }
+        if ball.charge < 0.0 {
+            ball.charge = 0.0;
+            run.outcome = Outcome::Stuck;
+            info!("Ball ran out of charge at {:?}", ball.cell);
         }
     }
 }
@@ -364,6 +374,31 @@ mod tests {
         step_once(&mut grid, &mut run, &mut ball);
         assert_eq!(ball.cell, IVec2::new(1, 1), "should take the diagonal");
         assert_eq!(grid.get(IVec2::new(1, 0)), Some(Cell::Trail));
+        // Climbing diagonal (spend 1) plus the consumed fill (spend 1).
+        assert_eq!(ball.charge, TEST_CHARGE - 2.0);
+    }
+
+    /// Cells filled in by a diagonal step are counted as distance travelled, so
+    /// they add to the charge pool.
+    #[test]
+    fn filling_the_staircase_adds_charge() {
+        let mut grid = grid();
+        grid.set(IVec2::new(10, 10), Cell::Solid);
+        grid.set(IVec2::new(10, 11), Cell::Surface);
+        grid.set(IVec2::new(11, 11), Cell::Surface);
+        grid.set(IVec2::new(11, 10), Cell::Surface);
+
+        let mut run = Run::default();
+        run.route = grid.reachable(IVec2::new(10, 11));
+        run.visits.insert(IVec2::new(10, 11), TEST_CHARGE);
+        let mut ball = Ball::new(IVec2::new(10, 11), TEST_CHARGE);
+        ball.dir = IVec2::new(0, 1);
+
+        step_once(&mut grid, &mut run, &mut ball);
+        // Down-right diagonal (+1) plus the filled (11, 11) (+1).
+        assert_eq!(ball.cell, IVec2::new(11, 10));
+        assert_eq!(grid.get(IVec2::new(11, 11)), Some(Cell::Trail));
+        assert_eq!(ball.charge, TEST_CHARGE + 2.0);
     }
 
     /// On a drawn diagonal, the ball should take diagonal steps rather than
