@@ -390,6 +390,7 @@ mod tests {
         for y in 10..20 {
             grid.paint(IVec2::new(20, y), Cell::Solid);
         }
+        grid.regenerate_surfaces();
         let tuning = Tuning {
             start_charge: 4.0,
             manual: false,

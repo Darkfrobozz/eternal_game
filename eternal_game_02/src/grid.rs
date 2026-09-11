@@ -64,8 +64,13 @@ pub struct Grid {
     pub dirty: bool,
     /// The image we blit the grid into.
     pub image: Handle<Image>,
-    /// Cells that belong to the level and can never be painted or erased.
+    /// Cells that belong to the level; the eraser may not remove these solids.
     pub locked: HashSet<IVec2>,
+    /// The authoritative set of solid cells. The surface is regenerated from
+    /// this whenever `solids_dirty` is set.
+    pub solids: HashSet<IVec2>,
+    /// Set when `solids` changes, so the surface can be regenerated.
+    pub solids_dirty: bool,
 }
 
 impl Grid {
@@ -77,6 +82,8 @@ impl Grid {
             dirty: true,
             image,
             locked: HashSet::new(),
+            solids: HashSet::new(),
+            solids_dirty: false,
         }
     }
 
@@ -84,14 +91,36 @@ impl Grid {
     /// them. The derived surface is *not* locked.
     pub fn lock_solids(&mut self) {
         self.locked.clear();
+        self.solids.clear();
         for y in 0..self.h {
             for x in 0..self.w {
                 let cell = IVec2::new(x, y);
                 if self.get(cell) == Some(Cell::Solid) {
                     self.locked.insert(cell);
+                    self.solids.insert(cell);
                 }
             }
         }
+    }
+
+    /// Rebuild every derived surface cell from `solids`. Cheap enough to run
+    /// whenever the matrix is dirty.
+    pub fn regenerate_surfaces(&mut self) {
+        if !self.solids_dirty {
+            return;
+        }
+        self.solids_dirty = false;
+        self.cells.iter_mut().for_each(|c| *c = Cell::Empty);
+        let solids: Vec<IVec2> = self.solids.iter().copied().collect();
+        for solid in solids {
+            self.set(solid, Cell::Solid);
+            for n in self.neighbors(solid).collect::<Vec<_>>() {
+                if self.get(n) == Some(Cell::Empty) {
+                    self.set(n, Cell::Surface);
+                }
+            }
+        }
+        self.dirty = true;
     }
 
     fn index(&self, cell: IVec2) -> Option<usize> {
@@ -117,11 +146,6 @@ impl Grid {
         NEIGHBORS8.iter().map(move |d| cell + *d)
     }
 
-    fn has_solid_neighbor(&self, cell: IVec2) -> bool {
-        self.neighbors(cell)
-            .any(|n| self.get(n) == Some(Cell::Solid))
-    }
-
     /// Is this cell part of the track the ball may stand on?
     pub fn is_track(&self, cell: IVec2) -> bool {
         matches!(self.get(cell), Some(Cell::Surface) | Some(Cell::Trail))
@@ -131,31 +155,17 @@ impl Grid {
     /// adjacent empty cell; `Cell::Empty` erases and cleans up surface that no
     /// longer touches any solid.
     pub fn paint(&mut self, cell: IVec2, value: Cell) {
-        // The eraser must not remove level geometry, but the pen may still add
-        // on top of it (e.g. building off the level's surface).
+        // The eraser must not remove level solids, but the pen may still add.
         if value == Cell::Empty && self.locked.contains(&cell) {
             return;
         }
-        self.set(cell, value);
-        match value {
-            Cell::Solid => {
-                for n in self.neighbors(cell).collect::<Vec<_>>() {
-                    if self.get(n) == Some(Cell::Empty) {
-                        self.set(n, Cell::Surface);
-                    }
-                }
-            }
-            Cell::Empty => {
-                for n in self.neighbors(cell).collect::<Vec<_>>() {
-                    if !self.locked.contains(&n)
-                        && self.get(n) == Some(Cell::Surface)
-                        && !self.has_solid_neighbor(n)
-                    {
-                        self.set(n, Cell::Empty);
-                    }
-                }
-            }
-            _ => {}
+        let changed = match value {
+            Cell::Solid => self.solids.insert(cell),
+            Cell::Empty => self.solids.remove(&cell),
+            _ => false,
+        };
+        if changed {
+            self.solids_dirty = true;
         }
     }
 
@@ -164,6 +174,10 @@ impl Grid {
     /// The surface is derived data, so a config only really needs to store the
     /// solids; this rebuilds everything else.
     pub fn rebuild_surface(&mut self) {
+        self.solids = (0..self.h)
+            .flat_map(|y| (0..self.w).map(move |x| IVec2::new(x, y)))
+            .filter(|c| self.get(*c) == Some(Cell::Solid))
+            .collect();
         for c in &mut self.cells {
             if *c != Cell::Solid {
                 *c = Cell::Empty;
@@ -212,15 +226,9 @@ impl Grid {
 
     /// Wipe everything except locked solids, then regrow their surface.
     pub fn clear(&mut self) {
-        for y in 0..self.h {
-            for x in 0..self.w {
-                let cell = IVec2::new(x, y);
-                if !self.locked.contains(&cell) {
-                    self.set(cell, Cell::Empty);
-                }
-            }
-        }
-        self.rebuild_surface();
+        self.solids.retain(|cell| self.locked.contains(cell));
+        self.solids_dirty = true;
+        self.regenerate_surfaces();
     }
 
     /// Turn every visited cell back into fresh surface.
@@ -351,10 +359,16 @@ mod tests {
         Grid::new(Handle::default())
     }
 
+    /// Paint a cell and rebuild the derived surface, as the app does.
+    fn paint(grid: &mut Grid, cell: IVec2, value: Cell) {
+        grid.paint(cell, value);
+        grid.regenerate_surfaces();
+    }
+
     #[test]
     fn painting_a_solid_grows_eight_surface_cells() {
         let mut grid = grid();
-        grid.paint(IVec2::new(5, 5), Cell::Solid);
+        paint(&mut grid, IVec2::new(5, 5), Cell::Solid);
         assert_eq!(grid.get(IVec2::new(5, 5)), Some(Cell::Solid));
         assert_eq!(grid.count(Cell::Surface), 8);
     }
@@ -362,8 +376,8 @@ mod tests {
     #[test]
     fn erasing_cleans_up_orphaned_surface() {
         let mut grid = grid();
-        grid.paint(IVec2::new(5, 5), Cell::Solid);
-        grid.paint(IVec2::new(5, 5), Cell::Empty);
+        paint(&mut grid, IVec2::new(5, 5), Cell::Solid);
+        paint(&mut grid, IVec2::new(5, 5), Cell::Empty);
         assert_eq!(grid.count(Cell::Surface), 0);
     }
 
@@ -372,32 +386,30 @@ mod tests {
         let mut grid = grid();
         for y in 5..8 {
             for x in 5..8 {
-                grid.paint(IVec2::new(x, y), Cell::Solid);
+                paint(&mut grid, IVec2::new(x, y), Cell::Solid);
             }
         }
         // The 5x5 neighbourhood minus the 3x3 solid block.
         assert_eq!(grid.count(Cell::Surface), 25 - 9);
     }
 
-    /// The eraser can't remove level geometry, but the pen can still draw
-    /// (including on top of the level's surface).
+    /// The eraser can't remove level solids, but the player's own solids are
+    /// fair game.
     #[test]
-    fn locked_cells_cannot_be_erased() {
+    fn locked_solids_cannot_be_erased() {
         let mut grid = grid();
-        grid.paint(IVec2::new(5, 5), Cell::Solid);
+        paint(&mut grid, IVec2::new(5, 5), Cell::Solid);
         grid.lock_solids();
 
-        // Locked solid cannot be erased...
-        grid.paint(IVec2::new(5, 5), Cell::Empty);
-        assert_eq!(grid.get(IVec2::new(5, 5)), Some(Cell::Solid));
-        // ...but the derived surface is not locked and can be erased.
-        assert!(grid.is_track(IVec2::new(4, 5)));
-        grid.paint(IVec2::new(4, 5), Cell::Empty);
-        assert_eq!(grid.get(IVec2::new(4, 5)), Some(Cell::Empty));
+        // Player draws their own solid elsewhere.
+        paint(&mut grid, IVec2::new(10, 10), Cell::Solid);
 
-        // The pen still works on empty ground.
-        grid.paint(IVec2::new(10, 10), Cell::Solid);
-        assert_eq!(grid.get(IVec2::new(10, 10)), Some(Cell::Solid));
+        // Level solid is protected.
+        paint(&mut grid, IVec2::new(5, 5), Cell::Empty);
+        assert_eq!(grid.get(IVec2::new(5, 5)), Some(Cell::Solid));
+        // Player's own solid is not.
+        paint(&mut grid, IVec2::new(10, 10), Cell::Empty);
+        assert_eq!(grid.get(IVec2::new(10, 10)), Some(Cell::Empty));
     }
 
     /// Reachability is orthogonal-only now, so a diagonal pair is not connected.

@@ -298,3 +298,8 @@ pub fn apply_hud(
         *visibility = target;
     }
 }
+
+/// Regenerate the derived surface from the solids set when it has changed.
+pub fn apply_solids(mut grid: ResMut<Grid>) {
+    grid.regenerate_surfaces();
+}

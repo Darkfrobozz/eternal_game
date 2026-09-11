@@ -20,7 +20,7 @@ use grid::{CELL_PX, GRID_H, GRID_W};
 use config::{Levels, cycle_level, load_first_level, update_level_text};
 use paint::{
     Brush, Debug, Mode, Placement, apply_hud, handle_mode, paint, place_start, report_outcome,
-    setup_grid, sync_image, toggle_debug,
+    apply_solids, setup_grid, sync_image, toggle_debug,
 };
 
 fn main() {
@@ -70,6 +70,7 @@ fn main() {
                 place_start,
                 handle_mode,
                 paint.run_if(in_paint_mode),
+                apply_solids,
                 step_ball.run_if(in_run_mode),
                 manual_step.run_if(in_run_mode),
                 sync_image,

@@ -444,6 +444,7 @@ mod tests {
                 }
             }
         }
+        grid.regenerate_surfaces();
         grid.find_start().unwrap()
     }
 
