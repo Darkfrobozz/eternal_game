@@ -359,7 +359,7 @@ pub fn manual_step(
 pub fn draw_itinerary(run: Res<Run>, grid: Res<Grid>, mut gizmos: Gizmos) {
     for m in &run.itinerary {
         let start = grid.cell_to_world(m.cell);
-        let end = start + m.dir.as_vec2() * (CELL_PX * 0.55);
+        let end = start + m.dir.as_vec2() * (CELL_PX * 0.85);
         let color = if m.combo {
             Color::srgb(1.0, 0.80, 0.2)
         } else {

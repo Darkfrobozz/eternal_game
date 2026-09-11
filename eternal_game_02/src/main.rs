@@ -9,6 +9,7 @@ mod config;
 mod grid;
 mod paint;
 
+use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;
 
 use ball::{
@@ -71,6 +72,7 @@ fn main() {
                 draw_itinerary,
                 update_charge_text,
                 report_outcome,
+                camera_controls,
             )
                 .chain(),
         )
@@ -87,4 +89,45 @@ fn in_paint_mode(mode: Res<Mode>) -> bool {
 
 fn in_run_mode(mode: Res<Mode>) -> bool {
     *mode == Mode::Run
+}
+
+/// Scroll to zoom, WASD to pan. Keeps the full grid available while letting you
+/// zoom in far enough to read the itinerary arrows.
+fn camera_controls(
+    keys: Res<ButtonInput<KeyCode>>,
+    time: Res<Time>,
+    mut wheel: MessageReader<MouseWheel>,
+    mut camera: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
+) {
+    let mut zoom = 0.0;
+    for event in wheel.read() {
+        zoom += event.y;
+    }
+    let pan_speed = 600.0 * time.delta_secs();
+
+    for (mut transform, mut projection) in &mut camera {
+        let mut scale = 1.0;
+        if let Projection::Orthographic(ortho) = &mut *projection {
+            if zoom != 0.0 {
+                ortho.scale = (ortho.scale * 0.9_f32.powf(zoom)).clamp(0.15, 4.0);
+            }
+            scale = ortho.scale;
+        }
+        let mut pan = Vec2::ZERO;
+        if keys.pressed(KeyCode::KeyW) {
+            pan.y += 1.0;
+        }
+        if keys.pressed(KeyCode::KeyS) {
+            pan.y -= 1.0;
+        }
+        if keys.pressed(KeyCode::KeyA) {
+            pan.x -= 1.0;
+        }
+        if keys.pressed(KeyCode::KeyD) {
+            pan.x += 1.0;
+        }
+        if pan != Vec2::ZERO {
+            transform.translation += (pan.normalize() * pan_speed * scale).extend(0.0);
+        }
+    }
 }
