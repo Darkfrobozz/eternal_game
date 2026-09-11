@@ -35,10 +35,11 @@ pub struct Placement {
 #[derive(Component)]
 pub struct StartMarker;
 
-/// Whether the debug HUD (controls + charge) is shown. Hidden in the game;
-/// press `H` to reveal it while testing.
+/// Debug / map-editor mode. Press `H` to toggle. When off the game is
+/// play-only: you can draw surfaces, but not place the ball, tune the start
+/// charge, or save/load. The controller HUD is only shown while debugging.
 #[derive(Resource, Default)]
-pub struct ShowHud(pub bool);
+pub struct Debug(pub bool);
 
 /// Marks the controls hint text.
 #[derive(Component)]
@@ -116,14 +117,15 @@ pub fn place_start(
     camera: Single<(&Camera, &GlobalTransform)>,
     window: Single<&Window>,
     mode: Res<Mode>,
+    debug: Res<Debug>,
     grid: Res<Grid>,
     mut placement: ResMut<Placement>,
     mut marker: Query<(&mut Transform, &mut Visibility), With<StartMarker>>,
 ) {
-    if keys.just_pressed(KeyCode::KeyB) {
+    if debug.0 && keys.just_pressed(KeyCode::KeyB) {
         placement.start = None;
     }
-    if *mode == Mode::Paint && mouse.just_pressed(MouseButton::Middle) {
+    if debug.0 && *mode == Mode::Paint && mouse.just_pressed(MouseButton::Middle) {
         let (camera, camera_transform) = *camera;
         if let Some(cell) = cursor_cell(camera, camera_transform, &window, &grid)
             && grid.is_track(cell)
@@ -132,7 +134,7 @@ pub fn place_start(
         }
     }
 
-    let visible = if *mode == Mode::Paint {
+    let visible = if debug.0 && *mode == Mode::Paint {
         placement.start
     } else {
         None
@@ -275,19 +277,19 @@ pub fn report_outcome(run: Res<Run>, mut reported: Local<bool>) {
     }
 }
 
-/// `H` toggles the debug HUD.
-pub fn toggle_hud(keys: Res<ButtonInput<KeyCode>>, mut show: ResMut<ShowHud>) {
+/// `H` toggles debug / map-editor mode.
+pub fn toggle_debug(keys: Res<ButtonInput<KeyCode>>, mut debug: ResMut<Debug>) {
     if keys.just_pressed(KeyCode::KeyH) {
-        show.0 = !show.0;
+        debug.0 = !debug.0;
     }
 }
 
 /// Show or hide the HUD texts.
 pub fn apply_hud(
-    show: Res<ShowHud>,
+    debug: Res<Debug>,
     mut texts: Query<&mut Visibility, Or<(With<HudText>, With<ChargeText>)>>,
 ) {
-    let target = if show.0 {
+    let target = if debug.0 {
         Visibility::Visible
     } else {
         Visibility::Hidden

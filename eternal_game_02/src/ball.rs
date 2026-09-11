@@ -143,7 +143,14 @@ pub fn update_charge_text(
 }
 
 /// `[` / `]` nudge the starting charge while testing.
-pub fn tune_start_charge(keys: Res<ButtonInput<KeyCode>>, mut tuning: ResMut<Tuning>) {
+pub fn tune_start_charge(
+    keys: Res<ButtonInput<KeyCode>>,
+    debug: Res<crate::paint::Debug>,
+    mut tuning: ResMut<Tuning>,
+) {
+    if !debug.0 {
+        return;
+    }
     if keys.just_pressed(KeyCode::BracketLeft) {
         tuning.start_charge = (tuning.start_charge - 1.0).max(0.0);
     }

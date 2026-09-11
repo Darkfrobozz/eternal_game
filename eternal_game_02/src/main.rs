@@ -18,8 +18,8 @@ use ball::{
 };
 use grid::{CELL_PX, GRID_H, GRID_W};
 use paint::{
-    Brush, Mode, Placement, ShowHud, apply_hud, handle_mode, paint, place_start, report_outcome,
-    setup_grid, sync_image, toggle_hud,
+    Brush, Debug, Mode, Placement, apply_hud, handle_mode, paint, place_start, report_outcome,
+    setup_grid, sync_image, toggle_debug,
 };
 
 fn main() {
@@ -57,7 +57,7 @@ fn main() {
         .init_resource::<Placement>()
         .init_resource::<Run>()
         .init_resource::<Tuning>()
-        .init_resource::<ShowHud>()
+        .init_resource::<Debug>()
         .add_systems(Startup, (setup_grid, setup_camera))
         .add_systems(
             Update,
@@ -74,7 +74,7 @@ fn main() {
                 update_ball_color,
                 draw_itinerary,
                 update_charge_text,
-                toggle_hud,
+                toggle_debug,
                 apply_hud,
                 report_outcome,
                 camera_controls,

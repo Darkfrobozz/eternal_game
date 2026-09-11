@@ -14,7 +14,7 @@ use bevy::prelude::*;
 
 use crate::ball::{Ball, Outcome, Run, Tuning};
 use crate::grid::{Cell, Grid};
-use crate::paint::{Mode, Placement};
+use crate::paint::{Debug, Mode, Placement};
 
 /// Where `Y` writes and `L` / `--replay` read by default.
 pub const CONFIG_PATH: &str = "debug_config.txt";
@@ -165,12 +165,16 @@ pub fn parse(text: &str, image: Handle<Image>) -> Option<(Grid, Option<IVec2>, T
 /// `Y` save / `L` load.
 pub fn debug_io(
     keys: Res<ButtonInput<KeyCode>>,
+    debug: Res<Debug>,
     mut grid: ResMut<Grid>,
     mut place: ResMut<Placement>,
     mut tuning: ResMut<Tuning>,
     mut run: ResMut<Run>,
     mut mode: ResMut<Mode>,
 ) {
+    if !debug.0 {
+        return;
+    }
     if keys.just_pressed(KeyCode::KeyY) {
         match fs::write(CONFIG_PATH, serialize(&grid, place.start, &tuning)) {
             Ok(()) => info!("Saved config to {CONFIG_PATH}"),
