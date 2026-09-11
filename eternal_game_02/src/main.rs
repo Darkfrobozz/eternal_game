@@ -29,8 +29,9 @@ use explosion::{
 };
 use menu::{Menu, Screen, draw_menu, menu_input, setup_menu};
 use paint::{
-    Brush, Debug, Mode, Placement, apply_hud, handle_mode, paint, place_start, report_outcome,
-    apply_solids, setup_grid, setup_solid_tile, sync_image, toggle_debug, watch_solid_tile,
+    Brush, Debug, Mode, Placement, apply_hud, handle_mode, leave_run_on_death, paint, place_start,
+    report_outcome, apply_solids, setup_grid, setup_solid_tile, sync_image, toggle_debug,
+    watch_solid_tile,
 };
 use rain::{
     apply_atmosphere_visibility, setup_background, setup_rain, setup_rain_assets, update_impact,
@@ -134,6 +135,9 @@ fn main() {
             Update,
             (
                 spawn_explosion,
+                // Dying kicks the player back into edit mode. Must run after the
+                // burst has consumed the ball.
+                leave_run_on_death,
                 update_detonation,
                 advance_detonation,
                 show_victory,

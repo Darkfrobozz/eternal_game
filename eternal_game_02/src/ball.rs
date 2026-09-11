@@ -463,20 +463,10 @@ pub(crate) fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
         } else {
             0.0
         };
-        // Avoid a dead end when any other option exists. Without this a solved
-        // loop can peel off down a one-cell spur — such as the launch pocket it
-        // started in — and die there instead of looping forever.
-        let dead_end = NEIGHBORS4.iter().all(|nd| {
-            let c = next + *nd;
-            c == ball.cell || !grid.is_track(c) || !run.route.contains(&c)
-        });
-        let key = if dead_end {
-            2000.0
-        } else if is_trail {
-            1000.0
-        } else {
-            0.0
-        } + reverse * 20.0
+        // Follow the contour literally: the ball rolls into a pocket rather
+        // than floating over it. The dead end is handled by the bounce below.
+        let key = if is_trail { 1000.0 } else { 0.0 }
+            + reverse * 20.0
             + counterclockwise * 10.0
             + (angle + std::f32::consts::PI) * 0.001;
         if best.is_none_or(|(bk, _, _)| key < bk) {
@@ -485,6 +475,16 @@ pub(crate) fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
     }
 
     let Some((_, next, is_trail)) = best else {
+        // A dead end is not fatal. The ball has rolled into a pocket: regrow
+        // its trail back into surface and treat the pocket as a fresh start,
+        // so it turns around and climbs back out. Only bounce once per cell —
+        // if it cannot move even with no "behind", it really is stuck.
+        if ball.moved {
+            grid.reset_trail();
+            ball.moved = false;
+            info!("Dead end at {:?}: climbing back out", ball.cell);
+            return;
+        }
         run.outcome = Outcome::Stuck;
         info!("Ball stuck at {:?}: no track ahead", ball.cell);
         return;
@@ -946,9 +946,11 @@ mod tests {
         assert!(ball.cell.x <= 1, "hopped to the right line: {:?}", ball.cell);
     }
 
-    /// A dead-end line must stop the ball, never send it back the way it came.
+    /// A dead end no longer stops the ball: it regrows its trail and turns
+    /// around, climbing back out of the pocket. On a finite line that means it
+    /// shuttles until the battery runs out — it never ends as `Stuck`.
     #[test]
-    fn dead_end_does_not_reverse() {
+    fn dead_end_bounces_back_out() {
         let mut grid = grid();
         for x in 5..=10 {
             grid.set(IVec2::new(x, 5), Cell::Surface);
@@ -963,15 +965,35 @@ mod tests {
         run.visits.insert(start, TEST_CHARGE);
         let mut ball = Ball::new(start, TEST_CHARGE);
 
-        for _ in 0..20 {
+        // Five forward moves put the ball on the far end of the line.
+        for _ in 0..5 {
+            step_once(&mut grid, &mut run, &mut ball);
+        }
+        assert_eq!(ball.cell, IVec2::new(10, 5));
+
+        // The next call is the bounce: no move, but the run stays alive.
+        step_once(&mut grid, &mut run, &mut ball);
+        assert_eq!(run.outcome, Outcome::Running, "a dead end must not end the run");
+        assert_eq!(
+            ball.cell,
+            IVec2::new(10, 5),
+            "the bounce does not move the ball"
+        );
+
+        // And then it climbs back out, facing the way it came.
+        step_once(&mut grid, &mut run, &mut ball);
+        assert_eq!(ball.cell, IVec2::new(9, 5));
+        assert_eq!(ball.dir, IVec2::new(-1, 0));
+
+        // Shuttling between the two ends drains the battery, so a line with no
+        // loop ends as a charge-out rather than a stuck.
+        for _ in 0..100 {
             if run.outcome != Outcome::Running {
                 break;
             }
             step_once(&mut grid, &mut run, &mut ball);
         }
-        assert_eq!(run.outcome, Outcome::Stuck);
-        assert_eq!(ball.cell, IVec2::new(10, 5));
-        assert_eq!(ball.dir, IVec2::X); // still facing forward
+        assert_eq!(run.outcome, Outcome::Depleted);
     }
 
     /// A horizontal move takes the sign of the vertical move before it: here an

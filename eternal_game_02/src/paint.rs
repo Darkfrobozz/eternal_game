@@ -262,6 +262,25 @@ fn leave_run(
     grid.reset_trail();
 }
 
+/// Dying drops the player straight back into edit mode, so a failed run does
+/// not leave them stuck watching an empty board until they press `E`. Victory
+/// is excluded: that sequence advances the level instead.
+///
+/// This runs after [`crate::explosion::spawn_explosion`], which consumes the
+/// ball and spawns the death burst.
+pub fn leave_run_on_death(
+    mut commands: Commands,
+    mut mode: ResMut<Mode>,
+    mut grid: ResMut<Grid>,
+    run: Res<Run>,
+    balls: Query<Entity, With<Ball>>,
+) {
+    if *mode != Mode::Run || !matches!(run.outcome, Outcome::Depleted | Outcome::Stuck) {
+        return;
+    }
+    leave_run(&mut commands, &mut mode, &mut grid, &balls);
+}
+
 /// Blit the array into the texture, but only when something changed.
 pub fn sync_image(
     mut grid: ResMut<Grid>,
@@ -431,4 +450,51 @@ pub fn apply_hud(
 /// Regenerate the derived surface from the solids set when it has changed.
 pub fn apply_solids(mut grid: ResMut<Grid>) {
     grid.regenerate_surfaces();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A death (depleted or stuck) drops back into edit mode and clears the
+    /// ball and its trail; victory and a still-running ball leave run mode be.
+    #[test]
+    fn death_returns_to_edit_mode() {
+        fn leave(outcome: Outcome) -> (Mode, bool, Option<Cell>) {
+            let mut app = App::new();
+            let mut grid = Grid::new(Handle::default());
+            grid.set(IVec2::new(5, 5), Cell::Trail);
+            app.insert_resource(grid);
+            app.insert_resource(Mode::Run);
+            app.insert_resource(Run {
+                outcome,
+                ..default()
+            });
+            app.add_systems(Update, leave_run_on_death);
+            let ball = app.world_mut().spawn(Ball::new(IVec2::new(5, 5), 0.0)).id();
+            app.update();
+
+            let mode = *app.world().resource::<Mode>();
+            let ball_alive = app.world().entities().contains(ball);
+            let cell = app.world().resource::<Grid>().get(IVec2::new(5, 5));
+            (mode, ball_alive, cell)
+        }
+
+        for outcome in [Outcome::Depleted, Outcome::Stuck] {
+            let (mode, ball_alive, cell) = leave(outcome);
+            assert_eq!(mode, Mode::Paint, "{outcome:?} should return to edit mode");
+            assert!(!ball_alive, "{outcome:?} should despawn the ball");
+            assert_eq!(
+                cell,
+                Some(Cell::Surface),
+                "{outcome:?} should clear the trail"
+            );
+        }
+
+        for outcome in [Outcome::Running, Outcome::Victory] {
+            let (mode, ball_alive, _) = leave(outcome);
+            assert_eq!(mode, Mode::Run, "{outcome:?} must not leave run mode");
+            assert!(ball_alive, "{outcome:?} should keep the ball");
+        }
+    }
 }

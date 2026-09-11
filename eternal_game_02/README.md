@@ -35,10 +35,15 @@ Cell values in the array: `0` empty, `1` solid (painted by the pen), `2` surface
   into the texture while `dirty`.
 - **Movement is orthogonal only** (`NEIGHBORS4`). The ball follows the
   8-connected solid component it started on and uses a right-hand rule
-  (right > straight > left, never reversing). `Grid::reachable` is a
-  4-connected flood fill of the route; a step must stay on the same component.
-  When any alternative exists, a move into a one-cell **dead end** is avoided,
-  so a loop does not peel off down a start-up spur and die there.
+  (right > straight > left, never reversing in normal travel). `Grid::reachable`
+  is a 4-connected flood fill of the route; a step must stay on the same
+  component. Dead ends are **not** avoided: the ball rolls into a one-cell
+  pocket, then **bounces** — `step_once` regrows the whole trail back into
+  surface and clears the ball's "behind", so it is re-seeded as a fresh start
+  and turns around to climb back out. Only a cell with no track neighbour at
+  all ends the run as `Stuck`. This keeps the ball hugging the contour (no
+  floating over the surface gap beside a pocket) while stopping a start-up
+  spur, such as level 02's launch slot, from killing the loop.
 - **Charge, per move:**
   - vertical: down `+1`, up `-1`;
   - horizontal: takes the **preceding vertical's** sign if it directly follows a
@@ -60,10 +65,14 @@ Cell values in the array: `0` empty, `1` solid (painted by the pen), `2` surface
   burns the level to ash and then wipes the grid completely clean. When the
   blast finishes the next game level loads automatically; if there is none, a
   **VICTORY** banner appears.
-- **Anything that stops the ball explodes.** `Depleted` (empty battery),
-  `Stuck` (no track ahead / no solid to follow) and `Victory` all despawn the
-  ball. The first two leave a single burst; victory leaves a level-wide blast
-  that consumes the level and clears the whole grid.
+- **Anything that ends the ball explodes.** `Depleted` (empty battery),
+  `Stuck` (no track neighbour at all, even with no "behind") and `Victory` all
+  despawn the ball. The first two leave a single burst; victory leaves a
+  level-wide blast that consumes the level and clears the whole grid. After a
+  `Depleted` or `Stuck` burst the game drops straight back into **edit mode**
+  (the ball is gone and its trail is cleared), so the player can fix the
+  drawing and roll again; victory instead advances to the next level.
+  A dead end is not one of these: it bounces the ball (see above).
 - **Start:** `find_start` (topmost surface cell) or a placed start
   (`Placement.start`). The initial heading is derived from the solid anchor so
   the ball always sets off clockwise.
@@ -101,7 +110,11 @@ red when the battery is empty through orange and yellow to green as it charges.
 The ball rolls — one full turn per cell — smoothly sliding from cell to cell and
 nestling against the surface it hugs.
 When the battery is empty and the ball asks for a move it cannot afford, the
-ball explodes instead of taking the step; a dead end ends the same way. Once a
+ball explodes instead of taking the step, and the game returns to edit mode
+automatically, clearing the trail, so you can adjust the drawing and roll again
+(no need to press `E`). A dead end is different: the ball rolls into the pocket,
+its trail regrows into surface and it turns around to climb back out, so a
+start-up slot no longer kills the loop. Once a
 loop is solved the ball keeps looping and speeds up a little every lap, and
 after a handful of laps the overload detonates the level, wipes the grid and
 loads the next level (or shows VICTORY when it was the last).
