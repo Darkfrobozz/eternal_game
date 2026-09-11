@@ -12,7 +12,9 @@ use bevy::prelude::*;
 
 use ball::{Run, step_ball, update_ball_transform, update_charge_text};
 use grid::{CELL_PX, GRID_H, GRID_W};
-use paint::{Brush, Mode, handle_mode, paint, report_outcome, setup_grid, sync_image};
+use paint::{
+    Brush, Mode, Placement, handle_mode, paint, place_start, report_outcome, setup_grid, sync_image,
+};
 
 fn main() {
     App::new()
@@ -31,11 +33,13 @@ fn main() {
         }))
         .init_resource::<Brush>()
         .init_resource::<Mode>()
+        .init_resource::<Placement>()
         .init_resource::<Run>()
         .add_systems(Startup, (setup_grid, setup_camera))
         .add_systems(
             Update,
             (
+                place_start,
                 handle_mode,
                 paint.run_if(in_paint_mode),
                 step_ball.run_if(in_run_mode),

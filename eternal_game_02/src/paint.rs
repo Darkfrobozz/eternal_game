@@ -24,6 +24,17 @@ pub struct Brush {
     last: Option<IVec2>,
 }
 
+/// Where the player has chosen to drop the ball (for testing). `None` means
+/// "use the auto start" (the topmost surface cell).
+#[derive(Resource, Default)]
+pub struct Placement {
+    pub start: Option<IVec2>,
+}
+
+/// The on-board indicator for a manually chosen start.
+#[derive(Component)]
+pub struct StartMarker;
+
 /// Create the backing image, the sprite that displays it, and the `Grid`.
 pub fn setup_grid(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     let mut image = Image::new_fill(
@@ -50,17 +61,84 @@ pub fn setup_grid(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
 
     commands.spawn((
         Text2d::new(
-            "Space: pen / run        Left-drag: draw solid        Right-drag: erase        C: clear",
+            "Space: pen / run   Left-drag: draw   Right-drag: erase   Middle-click: place ball   B: auto start   C: clear",
         ),
         TextFont {
-            font_size: FontSize::Px(17.0),
+            font_size: FontSize::Px(15.0),
             ..default()
         },
         TextColor(Color::srgb(0.65, 0.70, 0.82)),
         Transform::from_xyz(0.0, GRID_H as f32 * CELL_PX / 2.0 - 16.0, 10.0),
     ));
 
+    // Marker for the manually placed start (hidden until used).
+    commands.spawn((
+        StartMarker,
+        Sprite::from_color(Color::srgb(0.35, 0.75, 1.0), Vec2::splat(CELL_PX * 0.9)),
+        Transform::from_xyz(0.0, 0.0, 4.0),
+        Visibility::Hidden,
+    ));
+
     ball::spawn_charge_text(&mut commands);
+}
+
+/// Cursor position -> grid cell, if it is over the board.
+fn cursor_cell(
+    camera: &Camera,
+    camera_transform: &GlobalTransform,
+    window: &Window,
+    grid: &Grid,
+) -> Option<IVec2> {
+    let cursor = window.cursor_position()?;
+    let world = camera
+        .viewport_to_world_2d(camera_transform, cursor)
+        .ok()?;
+    grid.world_to_cell(world)
+}
+
+/// Middle-click drops the ball on a surface cell during pen mode; `B` reverts
+/// to the automatic start.
+#[allow(clippy::too_many_arguments)]
+pub fn place_start(
+    mouse: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    camera: Single<(&Camera, &GlobalTransform)>,
+    window: Single<&Window>,
+    mode: Res<Mode>,
+    grid: Res<Grid>,
+    mut placement: ResMut<Placement>,
+    mut marker: Query<(&mut Transform, &mut Visibility), With<StartMarker>>,
+) {
+    if keys.just_pressed(KeyCode::KeyB) {
+        placement.start = None;
+    }
+    if *mode == Mode::Paint && mouse.just_pressed(MouseButton::Middle) {
+        let (camera, camera_transform) = *camera;
+        if let Some(cell) = cursor_cell(camera, camera_transform, &window, &grid)
+            && grid.is_track(cell)
+        {
+            placement.start = Some(cell);
+        }
+    }
+
+    let visible = if *mode == Mode::Paint {
+        placement.start
+    } else {
+        None
+    }
+    .filter(|cell| grid.is_track(*cell));
+
+    if let Ok((mut transform, mut visibility)) = marker.single_mut() {
+        match visible {
+            Some(cell) => {
+                let pos = grid.cell_to_world(cell);
+                transform.translation.x = pos.x;
+                transform.translation.y = pos.y;
+                *visibility = Visibility::Visible;
+            }
+            None => *visibility = Visibility::Hidden,
+        }
+    }
 }
 
 /// Space toggles pen/run. Entering run resets the trail and drops the ball on
@@ -71,6 +149,7 @@ pub fn handle_mode(
     mut mode: ResMut<Mode>,
     mut grid: ResMut<Grid>,
     mut run: ResMut<Run>,
+    placement: Res<Placement>,
     balls: Query<Entity, With<Ball>>,
 ) {
     if !keys.just_pressed(KeyCode::Space) {
@@ -82,7 +161,11 @@ pub fn handle_mode(
             *mode = Mode::Run;
             grid.reset_trail();
             *run = Run::default();
-            match grid.find_start() {
+            let chosen = placement
+                .start
+                .filter(|cell| grid.is_track(*cell))
+                .or_else(|| grid.find_start());
+            match chosen {
                 Some(start) => {
                     run.route = grid.reachable(start);
                     run.visits.insert(start, START_CHARGE);
