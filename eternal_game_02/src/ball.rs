@@ -406,10 +406,10 @@ mod tests {
         assert_eq!(ball.dir, IVec2::X); // still facing forward
     }
 
-    /// A diagonal step also consumes the orthogonal cells that form the
-    /// staircase alternative for that step.
+    /// A diagonal that would cut a solid/void/trail corner is blocked; the
+    /// ball has to staircase around it instead.
     #[test]
-    fn diagonal_step_fills_the_staircase() {
+    fn diagonal_around_solid_is_blocked() {
         let mut grid = grid();
         grid.set(IVec2::new(0, 1), Cell::Solid);
         grid.set(IVec2::new(0, 0), Cell::Surface);
@@ -423,16 +423,12 @@ mod tests {
         ball.dir = IVec2::new(0, 1);
 
         step_once(&mut grid, &mut run, &mut ball);
-        assert_eq!(ball.cell, IVec2::new(1, 1), "should take the diagonal");
-        assert_eq!(grid.get(IVec2::new(1, 0)), Some(Cell::Trail));
-        // Climbing diagonal (spend 1) plus the consumed fill (spend 1).
-        assert_eq!(ball.charge, TEST_CHARGE - 2.0);
+        assert_eq!(ball.cell, IVec2::new(1, 0), "must go around, not cut the corner");
     }
 
-    /// Cells filled in by a diagonal step are counted as distance travelled, so
-    /// they add to the charge pool.
+    /// A blocked diagonal does not fill or charge anything.
     #[test]
-    fn filling_the_staircase_adds_charge() {
+    fn blocked_diagonal_does_not_fill() {
         let mut grid = grid();
         grid.set(IVec2::new(10, 10), Cell::Solid);
         grid.set(IVec2::new(10, 11), Cell::Surface);
@@ -446,16 +442,15 @@ mod tests {
         ball.dir = IVec2::new(0, 1);
 
         step_once(&mut grid, &mut run, &mut ball);
-        // Down-right diagonal (+1) plus the filled (11, 11) (+1).
-        assert_eq!(ball.cell, IVec2::new(11, 10));
-        assert_eq!(grid.get(IVec2::new(11, 11)), Some(Cell::Trail));
-        assert_eq!(ball.charge, TEST_CHARGE + 2.0);
+        assert_eq!(ball.cell, IVec2::new(11, 11));
+        assert_eq!(grid.get(IVec2::new(11, 10)), Some(Cell::Surface));
+        assert_eq!(ball.charge, TEST_CHARGE - 1.0);
     }
 
-    /// On a drawn diagonal, the ball should take diagonal steps rather than
-    /// staircasing (each level step is pure charge loss).
+    /// A drawn diagonal is now walked as a staircase: corner-cutting diagonals
+    /// are blocked, so every step is orthogonal.
     #[test]
-    fn diagonal_stroke_prefers_diagonal_steps() {
+    fn diagonal_stroke_is_walked_orthogonally() {
         let mut grid = grid();
         for i in 0..20 {
             grid.paint(IVec2::new(10 + i, 10 + i), Cell::Solid);
@@ -483,9 +478,8 @@ mod tests {
                 orthogonal += 1;
             }
         }
-        assert!(
-            diagonal > orthogonal,
-            "expected mostly diagonal moves, got diagonal={diagonal} orthogonal={orthogonal}"
-        );
+        assert_eq!(diagonal, 0, "no diagonal moves expected");
+        assert!(orthogonal > 0, "ball should still move");
     }
 }
+

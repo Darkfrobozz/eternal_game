@@ -101,22 +101,21 @@ impl Grid {
         matches!(self.get(cell), Some(Cell::Surface) | Some(Cell::Trail))
     }
 
-    /// A solid, or off the edge of the world (edges act as walls).
-    fn solid_or_out(&self, cell: IVec2) -> bool {
-        match self.get(cell) {
-            Some(Cell::Solid) | None => true,
-            _ => false,
-        }
+    /// A corner cell only fails to block a diagonal step if it is a valid `2`
+    /// path cell. Solids, the grid edge, the empty void, and cells the ball has
+    /// already walked all block.
+    fn blocks_diagonal(&self, cell: IVec2) -> bool {
+        self.get(cell) != Some(Cell::Surface)
     }
 
-    /// True when a *diagonal* step would squeeze between two solids (or the
-    /// grid edge), i.e. cut across a wall corner. Straight steps never block.
+    /// True when a *diagonal* step is blocked by either orthogonal corner.
+    /// Straight steps are never blocked.
     pub fn step_blocked(&self, from: IVec2, dir: IVec2) -> bool {
         if dir.x == 0 || dir.y == 0 {
             return false;
         }
-        self.solid_or_out(from + IVec2::new(dir.x, 0))
-            && self.solid_or_out(from + IVec2::new(0, dir.y))
+        self.blocks_diagonal(from + IVec2::new(dir.x, 0))
+            || self.blocks_diagonal(from + IVec2::new(0, dir.y))
     }
 
     /// Solid cells adjacent to both `a` and `b` — the contour(s) they share.
@@ -344,15 +343,17 @@ mod tests {
         assert!(!route.contains(&IVec2::new(0, 1)));
     }
 
-    /// ...but an open diagonal (no solids pinching the corner) still connects.
+    /// An open diagonal through empty corners is blocked too: a diagonal needs
+    /// real `2` path cells on both corners.
     #[test]
-    fn open_diagonal_still_connects() {
+    fn open_diagonal_is_blocked_by_void_corners() {
         let mut grid = grid();
         grid.set(IVec2::new(1, 0), Cell::Surface);
         grid.set(IVec2::new(0, 1), Cell::Surface);
 
+        assert!(grid.step_blocked(IVec2::new(1, 0), IVec2::new(-1, 1)));
         let route = grid.reachable(IVec2::new(1, 0));
-        assert!(route.contains(&IVec2::new(0, 1)));
+        assert!(!route.contains(&IVec2::new(0, 1)));
     }
 
     /// Two facing walls are separate contours even where their surfaces touch.
