@@ -27,11 +27,16 @@ pub struct Tuning {
     /// Charge the ball starts a run with. Zero by default, so the ball has to
     /// earn its energy; bump it to let a run start on flat or uphill ground.
     pub start_charge: f32,
+    /// When true the ball only steps on `N` instead of on a timer.
+    pub manual: bool,
 }
 
 impl Default for Tuning {
     fn default() -> Self {
-        Self { start_charge: 0.0 }
+        Self {
+            start_charge: 0.0,
+            manual: false,
+        }
     }
 }
 
@@ -80,12 +85,25 @@ pub enum Outcome {
 
 /// Per-run bookkeeping: first-arrival charge at each cell, and the flood-filled
 /// route (connected component) the ball is confined to.
+/// One step the ball took, kept for the on-screen itinerary.
+#[derive(Clone, Copy, Debug)]
+pub struct MoveRecord {
+    pub cell: IVec2,
+    pub dir: IVec2,
+    /// True when this was a combo (a horizontal converted by the preceding
+    /// vertical).
+    pub combo: bool,
+}
+
+/// Per-run bookkeeping: first-arrival charge at each cell, the flood-filled
+/// route, the solid components, and the itinerary of moves taken.
 #[derive(Resource, Default)]
 pub struct Run {
     pub visits: HashMap<IVec2, f32>,
     pub route: HashSet<IVec2>,
     /// Every solid cell labelled with its 8-connected component id.
     pub components: HashMap<IVec2, usize>,
+    pub itinerary: Vec<MoveRecord>,
     pub outcome: Outcome,
 }
 
@@ -115,7 +133,8 @@ pub fn update_charge_text(
         .next()
         .map_or(tuning.start_charge, |b| b.charge);
     for mut text in &mut texts {
-        text.0 = format!("Charge: {charge:.1}");
+        let mode = if tuning.manual { "MANUAL [N]" } else { "auto [M]" };
+        text.0 = format!("Charge: {charge:.1}   {mode}");
     }
 }
 
@@ -126,6 +145,9 @@ pub fn tune_start_charge(keys: Res<ButtonInput<KeyCode>>, mut tuning: ResMut<Tun
     }
     if keys.just_pressed(KeyCode::BracketRight) {
         tuning.start_charge += 1.0;
+    }
+    if keys.just_pressed(KeyCode::KeyM) {
+        tuning.manual = !tuning.manual;
     }
 }
 
@@ -144,11 +166,13 @@ pub fn spawn_ball(commands: &mut Commands, grid: &Grid, start: IVec2, charge: f3
 /// Advance every ball along its track.
 pub fn step_ball(
     time: Res<Time>,
+    tuning: Res<Tuning>,
     mut grid: ResMut<Grid>,
     mut run: ResMut<Run>,
     mut balls: Query<&mut Ball>,
 ) {
-    if run.outcome != Outcome::Running {
+    // In manual mode the ball only moves on `N` (see `manual_step`).
+    if run.outcome != Outcome::Running || tuning.manual {
         return;
     }
     let interval = 1.0 / STEPS_PER_SECOND;
@@ -171,6 +195,7 @@ pub fn start_run(run: &mut Run, grid: &Grid, start: IVec2, charge: f32) {
     run.components = grid.solid_components();
     run.visits.clear();
     run.visits.insert(start, charge);
+    run.itinerary.clear();
     run.outcome = Outcome::Running;
 }
 
@@ -268,14 +293,26 @@ pub(crate) fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
     }
     run.visits.entry(ball.cell).or_insert(ball.charge);
 
-    // Move, then settle the energy for this cell. Down accumulates; up and
-    // level consume one cell's worth.
+    // Move charge. A vertical move is signed by its direction (down builds,
+    // up spends). A horizontal (dy = 0) is normally zero, but if it follows a
+    // vertical it is converted to that vertical's sign — the combo.
     let d = next - ball.cell;
-    if d.y < 0 {
-        ball.charge += CHARGE_PER_CELL;
+    let combo = d.y == 0 && previous_dir.is_some_and(|p| p.y != 0);
+    let charge = if combo {
+        let previous = previous_dir.unwrap();
+        if previous.y < 0 {
+            CHARGE_PER_CELL
+        } else {
+            -CHARGE_PER_CELL
+        }
+    } else if d.y < 0 {
+        CHARGE_PER_CELL
+    } else if d.y > 0 {
+        -CHARGE_PER_CELL
     } else {
-        ball.charge -= CHARGE_PER_CELL;
-    }
+        0.0
+    };
+    ball.charge += charge;
     if ball.charge < 0.0 {
         ball.charge = 0.0;
         run.outcome = Outcome::Stuck;
@@ -285,24 +322,11 @@ pub(crate) fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
     ball.cell = next;
     ball.moved = true;
     run.visits.entry(next).or_insert(ball.charge);
-
-    // A 90-degree turn encodes a diagonal step. Charge it with the diagonal's
-    // sign: descending accumulates, ascending consumes. Only cells the ball
-    // actually visits are marked as trail.
-    if let Some(previous) = previous_dir
-        && d.x * previous.x + d.y * previous.y == 0
-    {
-        if d.y + previous.y < 0 {
-            ball.charge += CHARGE_PER_CELL;
-        } else {
-            ball.charge -= CHARGE_PER_CELL;
-        }
-        if ball.charge < 0.0 {
-            ball.charge = 0.0;
-            run.outcome = Outcome::Stuck;
-            info!("Ball ran out of charge at {:?}", ball.cell);
-        }
-    }
+    run.itinerary.push(MoveRecord {
+        cell: from,
+        dir: d,
+        combo,
+    });
 }
 
 /// Keep the sprite glued to its grid cell.
@@ -311,6 +335,37 @@ pub fn update_ball_transform(grid: Res<Grid>, mut balls: Query<(&Ball, &mut Tran
         let pos = grid.cell_to_world(ball.cell);
         transform.translation.x = pos.x;
         transform.translation.y = pos.y;
+    }
+}
+
+/// In manual mode, one step per press of `N`.
+pub fn manual_step(
+    keys: Res<ButtonInput<KeyCode>>,
+    tuning: Res<Tuning>,
+    mut grid: ResMut<Grid>,
+    mut run: ResMut<Run>,
+    mut balls: Query<&mut Ball>,
+) {
+    if !tuning.manual || run.outcome != Outcome::Running || !keys.just_pressed(KeyCode::KeyN) {
+        return;
+    }
+    for mut ball in &mut balls {
+        step_once(&mut grid, &mut run, &mut ball);
+    }
+}
+
+/// Draw the movement itinerary: an arrow at every cell the ball left, gold for
+/// combo moves so they visibly stand out.
+pub fn draw_itinerary(run: Res<Run>, grid: Res<Grid>, mut gizmos: Gizmos) {
+    for m in &run.itinerary {
+        let start = grid.cell_to_world(m.cell);
+        let end = start + m.dir.as_vec2() * (CELL_PX * 0.55);
+        let color = if m.combo {
+            Color::srgb(1.0, 0.80, 0.2)
+        } else {
+            Color::srgb(0.55, 0.75, 0.95)
+        };
+        gizmos.arrow_2d(start, end, color);
     }
 }
 
@@ -455,10 +510,10 @@ mod tests {
         assert_eq!(ball.dir, IVec2::X); // still facing forward
     }
 
-    /// An ascending turn (right + up) is a "bad diagonal": the up step and the
-    /// turn each consume, so the turn step costs 2.
+    /// A horizontal move takes the sign of the vertical move before it: here an
+    /// up step (-1) is followed by a horizontal converted to -1 (a combo).
     #[test]
-    fn ascending_turn_consumes() {
+    fn horizontal_takes_preceding_sign() {
         let mut grid = grid();
         grid.set(IVec2::new(5, 5), Cell::Solid);
         grid.set(IVec2::new(4, 5), Cell::Surface);
@@ -473,9 +528,9 @@ mod tests {
         ball.dir = IVec2::new(0, 1);
 
         step_once(&mut grid, &mut run, &mut ball); // up: -1
-        let after_up = ball.charge;
-        step_once(&mut grid, &mut run, &mut ball); // right turn: -1 step, -1 combo
-        assert_eq!(ball.charge, after_up - 2.0);
+        step_once(&mut grid, &mut run, &mut ball); // right after up: combo -1
+        assert_eq!(ball.charge, TEST_CHARGE - 2.0);
+        assert!(run.itinerary.last().expect("a move").combo);
     }
 
     /// With no orthogonal move available the ball stops and never reverses.

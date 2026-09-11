@@ -152,7 +152,14 @@ pub fn parse(text: &str, image: Handle<Image>) -> Option<(Grid, Option<IVec2>, T
     // The surface is derived, so a config only really needs the solids.
     grid.rebuild_surface();
 
-    Some((grid, place, Tuning { start_charge }))
+    Some((
+        grid,
+        place,
+        Tuning {
+            start_charge,
+            manual: false,
+        },
+    ))
 }
 
 /// `Y` save / `L` load.
@@ -244,7 +251,10 @@ mod tests {
         for y in 10..20 {
             grid.paint(IVec2::new(20, y), Cell::Solid);
         }
-        let tuning = Tuning { start_charge: 4.0 };
+        let tuning = Tuning {
+            start_charge: 4.0,
+            manual: false,
+        };
         let text = serialize(&grid, Some(IVec2::new(19, 20)), &tuning);
         // Cropped to the shape, not the whole 160x120 board.
         assert!(text.lines().count() < 20, "should be cropped:\n{text}");

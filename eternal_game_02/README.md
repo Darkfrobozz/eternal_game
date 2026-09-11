@@ -29,13 +29,21 @@ Cell values in the array: `0` empty, `1` solid (painted by the pen), `2` surface
 - Movement is orthogonal only. The ball follows the 8-connected solid mass it
   started on (its `component`) and uses a right-hand rule (right > straight >
   left, never reversing).
-- A 90-degree turn is the orthogonal encoding of a diagonal: it marks the
-  skipped 2x2 corner as trail and adds a `+1` charge correction, so a staircase
-  costs exactly what the equivalent diagonal would.
-- Charge is measured in cells moved: moving *down* accumulates, moving up or
-  level consumes. Charge hitting zero ends the run.
+- Charge is per move: a **vertical** step is signed by its direction (down
+  `+1`, up `-1`). A **horizontal** step is normally `0`, but if it follows a
+  vertical it is converted to that vertical's sign — the **combo**. Charge
+  hitting zero ends the run.
 - A run is won when the ball reaches a previously visited cell with at least
   the charge it had on the previous visit (a self-sustaining loop).
+
+## Controls
+
+- `Space` pen / run; left-drag draw; right-drag erase; `C` clear.
+- Middle-click places the ball; `B` returns to the automatic start.
+- `[` / `]` adjust the starting charge.
+- `M` toggles auto / manual stepping; in manual mode `N` advances one step.
+- Each step leaves an **arrow** showing the direction moved; combo moves are
+  drawn gold.
 
 ## Debugging / replay
 

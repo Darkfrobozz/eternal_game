@@ -11,7 +11,10 @@ mod paint;
 
 use bevy::prelude::*;
 
-use ball::{Run, Tuning, step_ball, tune_start_charge, update_ball_transform, update_charge_text};
+use ball::{
+    Run, Tuning, draw_itinerary, manual_step, step_ball, tune_start_charge, update_ball_transform,
+    update_charge_text,
+};
 use grid::{CELL_PX, GRID_H, GRID_W};
 use paint::{
     Brush, Mode, Placement, handle_mode, paint, place_start, report_outcome, setup_grid, sync_image,
@@ -62,8 +65,10 @@ fn main() {
                 handle_mode,
                 paint.run_if(in_paint_mode),
                 step_ball.run_if(in_run_mode),
+                manual_step.run_if(in_run_mode),
                 sync_image,
                 update_ball_transform,
+                draw_itinerary,
                 update_charge_text,
                 report_outcome,
             )
