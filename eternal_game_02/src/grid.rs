@@ -119,6 +119,20 @@ impl Grid {
             && self.solid_or_out(from + IVec2::new(0, dir.y))
     }
 
+    /// True when `a` and `b` are both adjacent to some common solid cell. This
+    /// is the local "same contour" test: it stops the ball hopping from one
+    /// wall's surface to a different wall's surface.
+    pub fn shares_solid(&self, a: IVec2, b: IVec2) -> bool {
+        NEIGHBORS8.iter().any(|offset| {
+            let solid = a + *offset;
+            if self.get(solid) != Some(Cell::Solid) {
+                return false;
+            }
+            let d = solid - b;
+            d.x.abs() <= 1 && d.y.abs() <= 1
+        })
+    }
+
     /// The pen. `Cell::Solid` lays down a `1` and grows `2` surface on every
     /// adjacent empty cell; `Cell::Empty` erases and cleans up surface that no
     /// longer touches any solid.
@@ -332,5 +346,21 @@ mod tests {
 
         let route = grid.reachable(IVec2::new(1, 0));
         assert!(route.contains(&IVec2::new(0, 1)));
+    }
+
+    /// Two facing walls are separate contours even where their surfaces touch.
+    #[test]
+    fn parallel_walls_do_not_share_a_contour() {
+        let mut grid = grid();
+        for y in 10..20 {
+            grid.set(IVec2::new(0, y), Cell::Solid);
+            grid.set(IVec2::new(3, y), Cell::Solid);
+            grid.set(IVec2::new(1, y), Cell::Surface);
+            grid.set(IVec2::new(2, y), Cell::Surface);
+        }
+        // Sideways hop between the two walls' surfaces is not the same contour.
+        assert!(!grid.shares_solid(IVec2::new(1, 15), IVec2::new(2, 15)));
+        // But continuing along one wall is.
+        assert!(grid.shares_solid(IVec2::new(1, 15), IVec2::new(1, 16)));
     }
 }

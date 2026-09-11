@@ -129,7 +129,8 @@ pub fn step_ball(
 
 /// One tile of movement.
 fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
-    let behind = ball.cell - ball.dir;
+    let from = ball.cell;
+    let behind = from - ball.dir;
 
     // Pick the most clockwise (rightmost) neighbour on the route, never
     // doubling back and never cutting a wall corner. Fresh surface always
@@ -140,12 +141,21 @@ fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
         if next == behind
             || !grid.is_track(next)
             || grid.step_blocked(ball.cell, d)
+            || !grid.shares_solid(ball.cell, next)
             || !run.route.contains(&next)
         {
             continue;
         }
         let is_trail = grid.get(next) == Some(Cell::Trail);
-        let key = turn(ball.dir.as_vec2(), d.as_vec2()) + if is_trail { 10.0 } else { 0.0 };
+        let angle = turn(ball.dir.as_vec2(), d.as_vec2());
+        // Prefer, in order: fresh surface, clockwise/straight, a diagonal step
+        // (go as far as possible), then the most clockwise of what remains.
+        let counterclockwise = if angle > 0.0 { 1.0 } else { 0.0 };
+        let orthogonal = if d.x == 0 || d.y == 0 { 1.0 } else { 0.0 };
+        let key = if is_trail { 100.0 } else { 0.0 }
+            + counterclockwise * 10.0
+            + orthogonal
+            + (angle + std::f32::consts::PI) * 0.001;
         if best.is_none_or(|(bk, _, _)| key < bk) {
             best = Some((key, next, is_trail));
         }
@@ -196,6 +206,17 @@ fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
     ball.dir = d;
     ball.cell = next;
     run.visits.entry(next).or_insert(ball.charge);
+
+    // If we cut a diagonal, also consume the two orthogonal "staircase" cells
+    // between the endpoints, so the parallel representation of this contour
+    // piece is filled too and no stray 2s are left behind.
+    if d.x != 0 && d.y != 0 {
+        for corner in [from + IVec2::new(d.x, 0), from + IVec2::new(0, d.y)] {
+            if grid.is_track(corner) {
+                grid.set(corner, Cell::Trail);
+            }
+        }
+    }
 }
 
 /// Keep the sprite glued to its grid cell.
@@ -222,39 +243,48 @@ mod tests {
         Grid::new(Handle::default())
     }
 
-    fn ring(grid: &mut Grid, x0: i32, y0: i32, x1: i32, y1: i32) {
-        for x in x0..=x1 {
-            grid.set(IVec2::new(x, y0), Cell::Surface);
-            grid.set(IVec2::new(x, y1), Cell::Surface);
+    /// Paint a filled disk of solids and return the ball's start.
+    fn disk(grid: &mut Grid, r: f32) -> IVec2 {
+        let (cx, cy) = (40.0f32, 40.0f32);
+        for y in 0..80 {
+            for x in 0..80 {
+                if ((x as f32) - cx).hypot((y as f32) - cy) <= r {
+                    grid.paint(IVec2::new(x, y), Cell::Solid);
+                }
+            }
         }
-        for y in y0..=y1 {
-            grid.set(IVec2::new(x0, y), Cell::Surface);
-            grid.set(IVec2::new(x1, y), Cell::Surface);
-        }
+        grid.find_start().unwrap()
     }
 
-    /// A ring has equal up and down moves, so the level parts are pure loss:
-    /// the ball should eventually run out rather than loop forever.
+    /// The ball must only ever step between cells that share a solid, so it
+    /// follows one contour and never hops to a parallel one.
     #[test]
-    fn clockwise_ring_drains_charge() {
+    fn painted_disk_contour_does_not_hop() {
         let mut grid = grid();
-        ring(&mut grid, 10, 10, 14, 14);
-        let start = grid.find_start().unwrap();
-        assert_eq!(start, IVec2::new(10, 14)); // topmost, then leftmost
-
+        let start = disk(&mut grid, 12.0);
         let mut run = Run::default();
         run.route = grid.reachable(start);
         run.visits.insert(start, START_CHARGE);
         let mut ball = Ball::new(start);
+        let mut visited = HashSet::new();
 
-        for _ in 0..100 {
+        for _ in 0..80 {
             if run.outcome != Outcome::Running {
                 break;
             }
+            let from = ball.cell;
             step_once(&mut grid, &mut run, &mut ball);
+            if run.outcome != Outcome::Running {
+                break;
+            }
+            assert!(
+                grid.shares_solid(from, ball.cell),
+                "hopped from {from:?} to {:?}",
+                ball.cell
+            );
+            visited.insert(ball.cell);
         }
-        assert_eq!(run.outcome, Outcome::Stuck);
-        assert!(ball.charge < START_CHARGE);
+        assert!(visited.len() > 10, "ball barely moved: {}", visited.len());
     }
 
     /// A dead-end line must stop the ball, never send it back the way it came.
@@ -263,6 +293,7 @@ mod tests {
         let mut grid = grid();
         for x in 5..=10 {
             grid.set(IVec2::new(x, 5), Cell::Surface);
+            grid.set(IVec2::new(x, 6), Cell::Solid);
         }
         let start = grid.find_start().unwrap();
         assert_eq!(start, IVec2::new(5, 5));
@@ -281,5 +312,26 @@ mod tests {
         assert_eq!(run.outcome, Outcome::Stuck);
         assert_eq!(ball.cell, IVec2::new(10, 5));
         assert_eq!(ball.dir, IVec2::X); // still facing forward
+    }
+
+    /// A diagonal step also consumes the orthogonal cells that form the
+    /// staircase alternative for that step.
+    #[test]
+    fn diagonal_step_fills_the_staircase() {
+        let mut grid = grid();
+        grid.set(IVec2::new(0, 1), Cell::Solid);
+        grid.set(IVec2::new(0, 0), Cell::Surface);
+        grid.set(IVec2::new(1, 0), Cell::Surface);
+        grid.set(IVec2::new(1, 1), Cell::Surface);
+
+        let mut run = Run::default();
+        run.route = grid.reachable(IVec2::new(0, 0));
+        run.visits.insert(IVec2::new(0, 0), START_CHARGE);
+        let mut ball = Ball::new(IVec2::new(0, 0));
+        ball.dir = IVec2::new(0, 1);
+
+        step_once(&mut grid, &mut run, &mut ball);
+        assert_eq!(ball.cell, IVec2::new(1, 1), "should take the diagonal");
+        assert_eq!(grid.get(IVec2::new(1, 0)), Some(Cell::Trail));
     }
 }
