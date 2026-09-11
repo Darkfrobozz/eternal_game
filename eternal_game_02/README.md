@@ -70,12 +70,14 @@ Progress is written by `load_level` whenever a game level is loaded, including
 
 ### Playing
 
-Normal (play-only): `Space` pen / run, `Tab` nudges the ball one cell
-mid-run, `PageDown` loads the next game level, left-drag draws solids,
-right-drag erases, `C` clears. The charge readout and controller hint are
-hidden; the player infers charge from the arrows (green accumulates, orange
-consumes) and the ball's battery colour (grey depleted, hue shifting as it
-charges).
+Normal (play-only): `Space` starts the ball rolling and stops it again;
+`Tab` takes manual control (from pen mode it enters run mode paused, and in
+run mode each press nudges the ball one cell); `PageDown` loads the next game
+level; left-drag draws solids, right-drag erases, `C` clears. Run mode is
+either automatic (`Space`) or manual (`Tab`). The charge readout and
+controller hint are hidden; the player infers charge from the arrows (green
+accumulates, orange consumes) and the ball's battery colour (grey depleted,
+hue shifting as it charges).
 
 `H` toggles **debug / map-editor mode**, which shows the HUD and enables:
 
@@ -126,11 +128,10 @@ six-item checklist:
 
 Drawing is detected as any solid the level did not lock, and looping as
 `run.outcome == Outcome::Won`. The checklist is not a strict sequence: each
-item latches the moment it happens, so `Space` can be done before `Tab` even
-though it is listed later. The prompt is a `Text2d` pinned to the top-left
-with `ScreenText`, so it stays readable while the player is zooming and
-panning. Loading any other level deactivates it; reloading the tutorial
-restarts the checklist.
+item latches the moment it happens, so the goals can be ticked in any order.
+The prompt is a `Text2d` pinned to the top-left with `ScreenText`, so it
+stays readable while the player is zooming and panning. Loading any other
+level deactivates it; reloading the tutorial restarts the checklist.
 
 ## Map editor workflow
 

@@ -71,7 +71,7 @@ pub fn setup_grid(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
 
     commands.spawn((
         Text2d::new(
-            "Space: pen/run   Tab: nudge step   Left-drag: draw   Right-drag: erase   Middle-click: place   B: auto start   [ ]: start charge\nN: step (manual)   M: auto/manual   PageDown: next level   scroll: zoom   WASD: pan   Y/L: save/load   C: clear",
+            "Space: roll/stop   Tab: nudge/manual   Left-drag: draw   Right-drag: erase   Middle-click: place   B: auto start   [ ]: start charge\nN: step (manual)   M: auto/manual   PageDown: next level   scroll: zoom   WASD: pan   Y/L: save/load   C: clear",
         ),
         TextFont {
             font_size: FontSize::Px(15.0),
@@ -154,8 +154,9 @@ pub fn place_start(
     }
 }
 
-/// Space toggles pen/run. Entering run resets the trail and drops the ball on
-/// the start; entering pen despawns the ball and clears the trail.
+/// `Space` starts the ball rolling and stops it again. `Tab` takes manual
+/// control: from pen mode it enters run mode paused, and in run mode every
+/// press nudges the ball one cell (see [`ball::manual_step`]).
 pub fn handle_mode(
     keys: Res<ButtonInput<KeyCode>>,
     mut commands: Commands,
@@ -163,16 +164,21 @@ pub fn handle_mode(
     mut grid: ResMut<Grid>,
     mut run: ResMut<Run>,
     placement: Res<Placement>,
-    tuning: Res<Tuning>,
+    mut tuning: ResMut<Tuning>,
     balls: Query<Entity, With<Ball>>,
 ) {
-    if !keys.just_pressed(KeyCode::Space) {
+    let space = keys.just_pressed(KeyCode::Space);
+    let tab = keys.just_pressed(KeyCode::Tab);
+    if !space && !tab {
         return;
     }
 
     match *mode {
         Mode::Paint => {
             *mode = Mode::Run;
+            // `Tab` enters run mode paused for manual stepping; `Space` starts
+            // it rolling.
+            tuning.manual = tab;
             grid.reset_trail();
             *run = Run::default();
             let chosen = placement
@@ -188,11 +194,23 @@ pub fn handle_mode(
             }
         }
         Mode::Run => {
-            *mode = Mode::Paint;
-            for entity in &balls {
-                commands.entity(entity).despawn();
+            if tab {
+                // Take manual control; `manual_step` performs the nudge.
+                tuning.manual = true;
             }
-            grid.reset_trail();
+            if space {
+                if tuning.manual {
+                    // Resume automatic rolling from a paused, manual run.
+                    tuning.manual = false;
+                } else {
+                    // Stop and return to the pen.
+                    *mode = Mode::Paint;
+                    for entity in &balls {
+                        commands.entity(entity).despawn();
+                    }
+                    grid.reset_trail();
+                }
+            }
         }
     }
 }

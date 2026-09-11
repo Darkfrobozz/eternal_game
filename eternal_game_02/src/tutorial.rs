@@ -22,7 +22,7 @@ use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;
 use bevy::sprite::Anchor;
 
-use crate::ball::{Outcome, Run};
+use crate::ball::{Outcome, Run, Tuning};
 use crate::grid::Grid;
 use crate::paint::Mode;
 use crate::screen::{ScreenAnchor, ScreenText};
@@ -136,8 +136,10 @@ pub fn track_tutorial(
     mode: Res<Mode>,
     grid: Res<Grid>,
     run: Res<Run>,
+    tuning: Res<Tuning>,
     mut wheel: MessageReader<MouseWheel>,
     mut tutorial: ResMut<Tutorial>,
+    mut last_steps: Local<usize>,
 ) {
     // Always drain the wheel so a future tutorial doesn't read stale events.
     let scrolled = wheel.read().any(|event| event.y.abs() > f32::EPSILON);
@@ -146,13 +148,23 @@ pub fn track_tutorial(
     }
 
     let running = *mode == Mode::Run;
+    // Did the ball actually advance since last frame? `Tab` also *enters* run
+    // mode, which does not count as a nudge, so compare the itinerary. When
+    // the itinerary shrinks, a fresh run started this frame.
+    let steps = run.itinerary.len();
+    let took_step = if steps < *last_steps {
+        steps > 0
+    } else {
+        steps > *last_steps
+    };
+    *last_steps = steps;
+
     // The pen can only add solids that the level did not lock, so any such
     // cell means the player has drawn something of their own.
     let drawn = grid
         .solids
         .iter()
         .any(|cell| !grid.locked.contains(cell));
-    let stepped = running && keys.just_pressed(KeyCode::Tab);
     let panned = keys.any_just_pressed([
         KeyCode::KeyW,
         KeyCode::KeyA,
@@ -161,8 +173,9 @@ pub fn track_tutorial(
     ]);
     tutorial.observe(Observed {
         drawn,
-        stepped,
-        rolled: running,
+        stepped: keys.just_pressed(KeyCode::Tab) && took_step,
+        // `Space` only "starts rolling" when it leaves the ball in auto mode.
+        rolled: keys.just_pressed(KeyCode::Space) && running && !tuning.manual,
         zoomed: scrolled,
         panned,
         looped: run.outcome == Outcome::Won,
