@@ -60,20 +60,26 @@ fn main() {
         return;
     }
 
-    App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                resolution: (
-                    (GRID_W as f32 * CELL_PX) as u32,
-                    (GRID_H as f32 * CELL_PX + 46.0) as u32,
-                )
-                    .into(),
-                resizable: true,
-                title: "Eternal Game 02".into(),
-                ..default()
-            }),
+    let plugins = DefaultPlugins.set(WindowPlugin {
+        primary_window: Some(Window {
+            resolution: (
+                (GRID_W as f32 * CELL_PX) as u32,
+                (GRID_H as f32 * CELL_PX + 46.0) as u32,
+            )
+                .into(),
+            resizable: true,
+            title: "Eternal Game 02".into(),
             ..default()
-        }))
+        }),
+        ..default()
+    });
+    // WSLg's audio stack is unreliable, so Linux builds get no audio system at
+    // all (the `sfx` module compiles its playback out to match).
+    #[cfg(target_os = "linux")]
+    let plugins = plugins.disable::<bevy::audio::AudioPlugin>();
+
+    App::new()
+        .add_plugins(plugins)
         .init_resource::<Brush>()
         .init_resource::<Mode>()
         .init_resource::<Placement>()
