@@ -91,7 +91,8 @@ pub struct MoveRecord {
     pub cell: IVec2,
     pub dir: IVec2,
     /// True when this was a combo (a horizontal converted by the preceding
-    /// vertical).
+    /// vertical). Kept for tests/inspection; colour only uses `charge`.
+    #[allow(dead_code)]
     pub combo: bool,
     /// Charge this move added (positive accumulates, negative consumes).
     pub charge: f32,
@@ -120,6 +121,7 @@ pub fn spawn_charge_text(commands: &mut Commands) {
         TextColor(Color::srgb(1.0, 0.85, 0.35)),
         Transform::from_xyz(0.0, GRID_H as f32 * CELL_PX / 2.0 - 40.0, 10.0),
         ChargeText,
+        Visibility::Hidden,
     ));
 }
 

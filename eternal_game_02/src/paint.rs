@@ -5,7 +5,7 @@ use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
-use crate::ball::{self, Ball, Outcome, Run, Tuning};
+use crate::ball::{self, Ball, ChargeText, Outcome, Run, Tuning};
 use crate::grid::{CELL_PX, Cell, GRID_H, GRID_W, Grid};
 
 /// Which half of the game is active.
@@ -34,6 +34,15 @@ pub struct Placement {
 /// The on-board indicator for a manually chosen start.
 #[derive(Component)]
 pub struct StartMarker;
+
+/// Whether the debug HUD (controls + charge) is shown. Hidden in the game;
+/// press `H` to reveal it while testing.
+#[derive(Resource, Default)]
+pub struct ShowHud(pub bool);
+
+/// Marks the controls hint text.
+#[derive(Component)]
+pub struct HudText;
 
 /// Create the backing image, the sprite that displays it, and the `Grid`.
 pub fn setup_grid(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
@@ -69,6 +78,8 @@ pub fn setup_grid(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
         },
         TextColor(Color::srgb(0.65, 0.70, 0.82)),
         Transform::from_xyz(0.0, GRID_H as f32 * CELL_PX / 2.0 - 16.0, 10.0),
+        HudText,
+        Visibility::Hidden,
     ));
 
     // Marker for the manually placed start (hidden until used).
@@ -261,5 +272,27 @@ pub fn report_outcome(run: Res<Run>, mut reported: Local<bool>) {
     } else if !*reported {
         *reported = true;
         info!("Run finished: {:?}", run.outcome);
+    }
+}
+
+/// `H` toggles the debug HUD.
+pub fn toggle_hud(keys: Res<ButtonInput<KeyCode>>, mut show: ResMut<ShowHud>) {
+    if keys.just_pressed(KeyCode::KeyH) {
+        show.0 = !show.0;
+    }
+}
+
+/// Show or hide the HUD texts.
+pub fn apply_hud(
+    show: Res<ShowHud>,
+    mut texts: Query<&mut Visibility, Or<(With<HudText>, With<ChargeText>)>>,
+) {
+    let target = if show.0 {
+        Visibility::Visible
+    } else {
+        Visibility::Hidden
+    };
+    for mut visibility in &mut texts {
+        *visibility = target;
     }
 }

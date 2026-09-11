@@ -42,6 +42,8 @@ Cell values in the array: `0` empty, `1` solid (painted by the pen), `2` surface
 - Middle-click places the ball; `B` returns to the automatic start.
 - `[` / `]` adjust the starting charge.
 - `M` toggles auto / manual stepping; in manual mode `N` advances one step.
+- `H` toggles the debug HUD. It is hidden in the game (no charge readout); the
+  player is meant to infer the charge relation from the arrows.
 - Each step leaves an **arrow** showing the direction moved: **green** if the
   step accumulated charge, **orange** if it consumed.
 
