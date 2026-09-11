@@ -20,7 +20,7 @@ use ball::{
     update_ball_transform, update_charge_text,
 };
 use grid::{CELL_PX, GRID_H, GRID_W};
-use config::{Levels, cycle_level, setup_levels, update_level_text};
+use config::{Levels, Progress, cycle_level, setup_levels, update_level_text};
 use menu::{Menu, Screen, draw_menu, menu_input, setup_menu};
 use paint::{
     Brush, Debug, Mode, Placement, apply_hud, handle_mode, paint, place_start, report_outcome,
@@ -68,6 +68,7 @@ fn main() {
         .init_resource::<Tuning>()
         .init_resource::<Debug>()
         .init_resource::<Levels>()
+        .init_resource::<Progress>()
         .init_resource::<Tutorial>()
         .init_resource::<Menu>()
         .init_resource::<Screen>()

@@ -21,6 +21,34 @@ use crate::tutorial::Tutorial;
 /// Where `Y` writes and `L` / `--replay` read by default.
 pub const CONFIG_PATH: &str = "debug_config.txt";
 
+/// Where `Continue` remembers the last game level the player loaded.
+pub const PROGRESS_PATH: &str = "progress.txt";
+
+/// The last game level the player loaded, for the menu's Continue option.
+/// Mirrors `progress.txt`.
+#[derive(Resource, Default)]
+pub struct Progress {
+    pub saved: Option<String>,
+}
+
+/// Read the saved level file name, if there is one.
+pub fn saved_level() -> Option<String> {
+    let name = fs::read_to_string(PROGRESS_PATH).ok()?;
+    let name = name.trim().to_string();
+    (!name.is_empty()).then_some(name)
+}
+
+/// Remember `path` as the current game level. The tutorial and the editor do
+/// not call this, so they never clobber a `Continue`.
+fn save_progress(path: &Path) {
+    let Some(name) = path.file_name() else {
+        return;
+    };
+    if let Err(error) = fs::write(PROGRESS_PATH, name.to_string_lossy().as_bytes()) {
+        warn!("Could not save progress to {PROGRESS_PATH}: {error}");
+    }
+}
+
 fn cell_char(cell: Cell) -> char {
     match cell {
         Cell::Empty => '.',
@@ -196,21 +224,46 @@ impl Levels {
         Self { files, current: -1 }
     }
 
-    pub fn next(&mut self) -> Option<PathBuf> {
+    /// The next non-tutorial level, wrapping around. `Tab` uses this so the
+    /// tutorial stays a menu-only experience.
+    pub fn next_game(&mut self) -> Option<PathBuf> {
         if self.files.is_empty() {
             return None;
         }
-        self.current = (self.current + 1) % self.files.len() as isize;
-        Some(self.files[self.current as usize].clone())
+        let len = self.files.len() as isize;
+        for _ in 0..self.files.len() {
+            self.current = (self.current + 1).rem_euclid(len);
+            let path = &self.files[self.current as usize];
+            if !is_tutorial(path) {
+                return Some(path.clone());
+            }
+        }
+        None
     }
 
-    /// Start again from the first level.
-    pub fn first(&mut self) -> Option<PathBuf> {
-        if self.files.is_empty() {
-            return None;
-        }
-        self.current = 0;
-        Some(self.files[0].clone())
+    /// The first non-tutorial level — where **New Game** starts.
+    pub fn first_game(&mut self) -> Option<PathBuf> {
+        let index = self.files.iter().position(|path| !is_tutorial(path))?;
+        self.current = index as isize;
+        Some(self.files[index].clone())
+    }
+
+    /// The tutorial level, for the menu's **Tutorial** entry.
+    pub fn tutorial(&mut self) -> Option<PathBuf> {
+        let index = self.files.iter().position(|path| is_tutorial(path))?;
+        self.current = index as isize;
+        Some(self.files[index].clone())
+    }
+
+    /// Find a level by file name (used by **Continue**).
+    pub fn find(&mut self, name: &str) -> Option<PathBuf> {
+        let index = self.files.iter().position(|path| {
+            path.file_name()
+                .map(|file| file.to_string_lossy() == name)
+                .unwrap_or(false)
+        })?;
+        self.current = index as isize;
+        Some(self.files[index].clone())
     }
 
     pub fn label(&self) -> String {
@@ -239,6 +292,7 @@ pub fn load_level(
     run: &mut Run,
     mode: &mut Mode,
     tutorial: &mut Tutorial,
+    progress: &mut Progress,
 ) {
     let Ok(text) = fs::read_to_string(path) else {
         warn!("Could not read level {}", path.display());
@@ -253,7 +307,13 @@ pub fn load_level(
     *tuning = loaded_tuning;
     *run = Run::default();
     *mode = Mode::Paint;
-    tutorial.set_level(is_tutorial(path));
+    let tutorial_level = is_tutorial(path);
+    tutorial.set_level(tutorial_level);
+    // Remember game progress, but not the tutorial or the editor.
+    if !tutorial_level {
+        progress.saved = path.file_name().map(|name| name.to_string_lossy().into_owned());
+        save_progress(path);
+    }
     info!("Loaded level {}", path.display());
 }
 
@@ -274,7 +334,11 @@ pub fn update_level_text(levels: Res<Levels>, mut texts: Query<&mut Text2d, With
 /// Startup: scan `levels/` and spawn the (hidden) level-name label. No level
 /// is loaded yet — the main menu decides whether to start a game or open the
 /// map editor.
-pub fn setup_levels(mut commands: Commands, mut levels: ResMut<Levels>) {
+pub fn setup_levels(
+    mut commands: Commands,
+    mut levels: ResMut<Levels>,
+    mut progress: ResMut<Progress>,
+) {
     commands.spawn((
         Text2d::new("Level: -"),
         TextFont {
@@ -288,6 +352,7 @@ pub fn setup_levels(mut commands: Commands, mut levels: ResMut<Levels>) {
         Visibility::Hidden,
     ));
     *levels = Levels::scan();
+    progress.saved = saved_level();
     info!("Found {} level(s) in levels/", levels.files.len());
 }
 
@@ -302,11 +367,12 @@ pub fn cycle_level(
     mut run: ResMut<Run>,
     mut mode: ResMut<Mode>,
     mut tutorial: ResMut<Tutorial>,
+    mut progress: ResMut<Progress>,
 ) {
     if !keys.just_pressed(KeyCode::Tab) {
         return;
     }
-    if let Some(path) = levels.next() {
+    if let Some(path) = levels.next_game() {
         load_level(
             &path,
             &mut grid,
@@ -315,6 +381,7 @@ pub fn cycle_level(
             &mut run,
             &mut mode,
             &mut tutorial,
+            &mut progress,
         );
     }
 }
@@ -436,5 +503,42 @@ mod tests {
         let handle = Handle::<Image>::default();
         let (grid, _, _) = parse(text, handle.clone()).expect("parses");
         assert_eq!(grid.image.id(), handle.id());
+    }
+
+    fn levels(names: &[&str]) -> Levels {
+        Levels {
+            files: names.iter().map(PathBuf::from).collect(),
+            current: -1,
+        }
+    }
+
+    #[test]
+    fn new_game_skips_the_tutorial() {
+        let mut list = levels(&["levels/00_tutorial.txt", "levels/01.txt", "levels/02.txt"]);
+        assert_eq!(list.first_game(), Some(PathBuf::from("levels/01.txt")));
+        assert_eq!(list.current, 1);
+    }
+
+    #[test]
+    fn tutorial_finds_the_tutorial_level() {
+        let mut list = levels(&["levels/00_tutorial.txt", "levels/01.txt"]);
+        assert_eq!(list.tutorial(), Some(PathBuf::from("levels/00_tutorial.txt")));
+        assert_eq!(list.current, 0);
+    }
+
+    #[test]
+    fn tab_skips_the_tutorial_and_wraps() {
+        let mut list = levels(&["levels/00_tutorial.txt", "levels/01.txt", "levels/02.txt"]);
+        list.current = 2; // sitting on the last level
+        // Wrapping forward must not land on the tutorial.
+        assert_eq!(list.next_game(), Some(PathBuf::from("levels/01.txt")));
+    }
+
+    #[test]
+    fn continue_finds_a_level_by_file_name() {
+        let mut list = levels(&["levels/00_tutorial.txt", "levels/01.txt", "levels/02.txt"]);
+        assert_eq!(list.find("02.txt"), Some(PathBuf::from("levels/02.txt")));
+        assert_eq!(list.current, 2);
+        assert_eq!(list.find("missing.txt"), None);
     }
 }

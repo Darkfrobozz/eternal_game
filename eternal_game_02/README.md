@@ -53,14 +53,20 @@ Cell values in the array: `0` empty, `1` solid (painted by the pen), `2` surface
 
 ### Title menu
 
-The game opens on a small title menu:
+The game opens on a title menu:
 
-- **New Game** loads the first level (currently the tutorial). `Up`/`Down` or
-  `W`/`S` move the cursor, `1`/`2` pick directly, `Enter`/`Space` confirm.
+- **Continue Game** (only shown once progress exists) resumes the last game
+  level loaded, remembered in `progress.txt`.
+- **New Game** starts at the first non-tutorial level.
+- **Tutorial** loads the guided level.
 - **Map Editor** opens a blank board with the editor HUD on (see the
   [map editor workflow](#map-editor-workflow)).
-- `Esc` clears the board and returns to the title menu (in the editor, press
-  `Y` to save first — `Esc` does not auto-save).
+- `Up`/`Down` or `W`/`S` move the cursor, `1`-`4` pick directly,
+  `Enter`/`Space` confirm. `Esc` clears the board and returns to the title menu
+  (in the editor, press `Y` to save first — `Esc` does not auto-save).
+
+Progress is written by `load_level` whenever a game level is loaded, including
+`Tab`; the tutorial and the editor never overwrite a `Continue`.
 
 ### Playing
 
@@ -82,8 +88,9 @@ the ball's battery colour (grey depleted, hue shifting as it charges).
 `levels/*.txt` use the config format. On load, `lock_solids` records the level's
 **solid** cells so the eraser cannot remove them (the derived surface is not
 locked — but since it is derived, erasing a surface cell is a no-op anyway).
-`Tab` cycles levels; the debug HUD shows the current file name. A level's
-`place` and `start_charge` are its starting condition.
+`Tab` cycles the **game** levels (skipping the tutorial); the debug HUD shows
+the current file name. A level's `place` and `start_charge` are its starting
+condition.
 
 A level is positioned wherever its cells sit in the 160×120 board. The camera
 opens centred on the board centre, so to centre a level on screen its **solid
