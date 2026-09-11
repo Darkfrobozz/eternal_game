@@ -64,6 +64,8 @@ pub struct Grid {
     pub dirty: bool,
     /// The image we blit the grid into.
     pub image: Handle<Image>,
+    /// Cells that belong to the level and can never be painted or erased.
+    pub locked: HashSet<IVec2>,
 }
 
 impl Grid {
@@ -74,6 +76,20 @@ impl Grid {
             cells: vec![Cell::Empty; (GRID_W * GRID_H) as usize],
             dirty: true,
             image,
+            locked: HashSet::new(),
+        }
+    }
+
+    /// Lock every non-empty cell (level geometry) so it cannot be edited.
+    pub fn lock_non_empty(&mut self) {
+        self.locked.clear();
+        for y in 0..self.h {
+            for x in 0..self.w {
+                let cell = IVec2::new(x, y);
+                if self.get(cell) != Some(Cell::Empty) {
+                    self.locked.insert(cell);
+                }
+            }
         }
     }
 
@@ -114,18 +130,24 @@ impl Grid {
     /// adjacent empty cell; `Cell::Empty` erases and cleans up surface that no
     /// longer touches any solid.
     pub fn paint(&mut self, cell: IVec2, value: Cell) {
+        if self.locked.contains(&cell) {
+            return;
+        }
         self.set(cell, value);
         match value {
             Cell::Solid => {
                 for n in self.neighbors(cell).collect::<Vec<_>>() {
-                    if self.get(n) == Some(Cell::Empty) {
+                    if !self.locked.contains(&n) && self.get(n) == Some(Cell::Empty) {
                         self.set(n, Cell::Surface);
                     }
                 }
             }
             Cell::Empty => {
                 for n in self.neighbors(cell).collect::<Vec<_>>() {
-                    if self.get(n) == Some(Cell::Surface) && !self.has_solid_neighbor(n) {
+                    if !self.locked.contains(&n)
+                        && self.get(n) == Some(Cell::Surface)
+                        && !self.has_solid_neighbor(n)
+                    {
                         self.set(n, Cell::Empty);
                     }
                 }
@@ -185,9 +207,16 @@ impl Grid {
         }
     }
 
-    /// Wipe the board.
+    /// Wipe everything except locked level geometry.
     pub fn clear(&mut self) {
-        self.cells.iter_mut().for_each(|c| *c = Cell::Empty);
+        for y in 0..self.h {
+            for x in 0..self.w {
+                let cell = IVec2::new(x, y);
+                if !self.locked.contains(&cell) {
+                    self.set(cell, Cell::Empty);
+                }
+            }
+        }
         self.dirty = true;
     }
 
@@ -345,6 +374,20 @@ mod tests {
         }
         // The 5x5 neighbourhood minus the 3x3 solid block.
         assert_eq!(grid.count(Cell::Surface), 25 - 9);
+    }
+
+    /// Level geometry is locked: the player can't paint over or erase it.
+    #[test]
+    fn locked_cells_cannot_be_edited() {
+        let mut grid = grid();
+        grid.paint(IVec2::new(5, 5), Cell::Solid);
+        grid.lock_non_empty();
+
+        grid.paint(IVec2::new(5, 5), Cell::Empty);
+        assert_eq!(grid.get(IVec2::new(5, 5)), Some(Cell::Solid));
+        // ...but the player's own drawing still works.
+        grid.paint(IVec2::new(10, 10), Cell::Solid);
+        assert_eq!(grid.get(IVec2::new(10, 10)), Some(Cell::Solid));
     }
 
     /// Reachability is orthogonal-only now, so a diagonal pair is not connected.

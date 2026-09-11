@@ -9,11 +9,12 @@
 //! makes a small file.
 
 use std::fs;
+use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 
 use crate::ball::{Ball, Outcome, Run, Tuning};
-use crate::grid::{Cell, Grid};
+use crate::grid::{CELL_PX, Cell, GRID_H, Grid};
 use crate::paint::{Debug, Mode, Placement};
 
 /// Where `Y` writes and `L` / `--replay` read by default.
@@ -160,6 +161,140 @@ pub fn parse(text: &str, image: Handle<Image>) -> Option<(Grid, Option<IVec2>, T
             manual: false,
         },
     ))
+}
+
+/// Load a level: parse, then lock every non-empty cell so the geometry can't
+/// be erased (only the player's own strokes can be).
+pub fn parse_level(text: &str, image: Handle<Image>) -> Option<(Grid, Option<IVec2>, Tuning)> {
+    let (mut grid, place, tuning) = parse(text, image)?;
+    grid.lock_non_empty();
+    Some((grid, place, tuning))
+}
+
+/// The level files found under `levels/`, and which one is loaded.
+#[derive(Resource, Default)]
+pub struct Levels {
+    pub files: Vec<PathBuf>,
+    pub current: isize,
+}
+
+impl Levels {
+    pub fn scan() -> Self {
+        let mut files = Vec::new();
+        if let Ok(entries) = fs::read_dir("levels") {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_some_and(|e| e == "txt") {
+                    files.push(path);
+                }
+            }
+        }
+        files.sort();
+        Self { files, current: -1 }
+    }
+
+    pub fn next(&mut self) -> Option<PathBuf> {
+        if self.files.is_empty() {
+            return None;
+        }
+        self.current = (self.current + 1) % self.files.len() as isize;
+        Some(self.files[self.current as usize].clone())
+    }
+
+    pub fn label(&self) -> String {
+        self.files
+            .get(self.current.max(0) as usize)
+            .map(|p| p.file_name().unwrap_or_default().to_string_lossy().into_owned())
+            .unwrap_or_else(|| "no levels".into())
+    }
+}
+
+/// Replace the running state with the level in `path`.
+fn load_level_into(
+    path: &Path,
+    grid: &mut Grid,
+    place: &mut Placement,
+    tuning: &mut Tuning,
+    run: &mut Run,
+    mode: &mut Mode,
+) {
+    let Ok(text) = fs::read_to_string(path) else {
+        warn!("Could not read level {}", path.display());
+        return;
+    };
+    let Some((loaded, loaded_place, loaded_tuning)) = parse_level(&text, grid.image.clone()) else {
+        warn!("Could not parse level {}", path.display());
+        return;
+    };
+    *grid = loaded;
+    place.start = loaded_place;
+    *tuning = loaded_tuning;
+    *run = Run::default();
+    *mode = Mode::Paint;
+    info!("Loaded level {}", path.display());
+}
+
+/// Marks the level-name line of the debug HUD.
+#[derive(Component)]
+pub struct LevelText;
+
+/// Keep the HUD label in sync with the loaded level.
+pub fn update_level_text(levels: Res<Levels>, mut texts: Query<&mut Text2d, With<LevelText>>) {
+    if !levels.is_changed() {
+        return;
+    }
+    for mut text in &mut texts {
+        text.0 = format!("Level: {}", levels.label());
+    }
+}
+
+/// Startup: scan `levels/` and load the first one.
+pub fn load_first_level(
+    mut commands: Commands,
+    mut levels: ResMut<Levels>,
+    mut grid: ResMut<Grid>,
+    mut place: ResMut<Placement>,
+    mut tuning: ResMut<Tuning>,
+    mut run: ResMut<Run>,
+    mut mode: ResMut<Mode>,
+) {
+    commands.spawn((
+        Text2d::new("Level: -"),
+        TextFont {
+            font_size: FontSize::Px(15.0),
+            ..default()
+        },
+        TextColor(Color::srgb(0.65, 0.70, 0.82)),
+        Transform::from_xyz(0.0, GRID_H as f32 * CELL_PX / 2.0 - 64.0, 10.0),
+        LevelText,
+        crate::paint::HudText,
+        Visibility::Hidden,
+    ));
+    *levels = Levels::scan();
+    if let Some(path) = levels.next() {
+        load_level_into(&path, &mut grid, &mut place, &mut tuning, &mut run, &mut mode);
+    } else {
+        info!("No levels found in levels/");
+    }
+}
+
+/// `Tab` loads the next level.
+#[allow(clippy::too_many_arguments)]
+pub fn cycle_level(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut levels: ResMut<Levels>,
+    mut grid: ResMut<Grid>,
+    mut place: ResMut<Placement>,
+    mut tuning: ResMut<Tuning>,
+    mut run: ResMut<Run>,
+    mut mode: ResMut<Mode>,
+) {
+    if !keys.just_pressed(KeyCode::Tab) {
+        return;
+    }
+    if let Some(path) = levels.next() {
+        load_level_into(&path, &mut grid, &mut place, &mut tuning, &mut run, &mut mode);
+    }
 }
 
 /// `Y` save / `L` load.

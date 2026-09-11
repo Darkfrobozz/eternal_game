@@ -51,6 +51,14 @@ the ball's battery colour (grey when depleted, hue shifting as it charges).
 - `Y` / `L` save / load `debug_config.txt`.
 - Scroll wheel zooms, WASD pans.
 
+## Levels
+
+`levels/*.txt` are loaded with the config format. Level geometry (every
+non-empty cell at load) is **locked**: the player can draw their own strokes
+but cannot erase the level. `Tab` cycles levels; the debug HUD shows the
+current file name. A level's `place` and `start_charge` are its starting
+condition.
+
 ## Debugging / replay
 
 - `Y` in-game saves the current drawing, ball placement and start charge to

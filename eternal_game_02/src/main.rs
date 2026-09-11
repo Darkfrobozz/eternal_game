@@ -17,6 +17,7 @@ use ball::{
     update_ball_transform, update_charge_text,
 };
 use grid::{CELL_PX, GRID_H, GRID_W};
+use config::{Levels, cycle_level, load_first_level, update_level_text};
 use paint::{
     Brush, Debug, Mode, Placement, apply_hud, handle_mode, paint, place_start, report_outcome,
     setup_grid, sync_image, toggle_debug,
@@ -58,11 +59,13 @@ fn main() {
         .init_resource::<Run>()
         .init_resource::<Tuning>()
         .init_resource::<Debug>()
-        .add_systems(Startup, (setup_grid, setup_camera))
+        .init_resource::<Levels>()
+        .add_systems(Startup, (setup_grid, load_first_level, setup_camera).chain())
         .add_systems(
             Update,
             (
                 config::debug_io,
+                cycle_level,
                 tune_start_charge,
                 place_start,
                 handle_mode,
@@ -74,6 +77,7 @@ fn main() {
                 update_ball_color,
                 draw_itinerary,
                 update_charge_text,
+                update_level_text,
                 toggle_debug,
                 apply_hud,
                 report_outcome,
