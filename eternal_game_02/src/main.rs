@@ -13,8 +13,8 @@ use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;
 
 use ball::{
-    Run, Tuning, draw_itinerary, manual_step, step_ball, tune_start_charge, update_ball_transform,
-    update_charge_text,
+    Run, Tuning, draw_itinerary, manual_step, step_ball, tune_start_charge, update_ball_color,
+    update_ball_transform, update_charge_text,
 };
 use grid::{CELL_PX, GRID_H, GRID_W};
 use paint::{
@@ -71,6 +71,7 @@ fn main() {
                 manual_step.run_if(in_run_mode),
                 sync_image,
                 update_ball_transform,
+                update_ball_color,
                 draw_itinerary,
                 update_charge_text,
                 toggle_hud,

@@ -330,6 +330,22 @@ pub(crate) fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
     });
 }
 
+/// Colour the ball by its charge, battery-style: grey when depleted, waxing
+/// through blue to green as it fills. Charge is unbounded, so `t` saturates.
+pub fn update_ball_color(mut balls: Query<(&Ball, &mut Sprite)>) {
+    for (ball, mut sprite) in &mut balls {
+        sprite.color = charge_color(ball.charge);
+    }
+}
+
+fn charge_color(charge: f32) -> Color {
+    let t = (charge / (charge + 8.0)).clamp(0.0, 1.0);
+    let hue = 210.0 - 90.0 * t; // blue -> green
+    let saturation = 0.9 * t;
+    let lightness = 0.40 + 0.25 * t;
+    Color::hsl(hue, saturation, lightness)
+}
+
 /// Keep the sprite glued to its grid cell.
 pub fn update_ball_transform(grid: Res<Grid>, mut balls: Query<(&Ball, &mut Transform)>) {
     for (ball, mut transform) in &mut balls {
