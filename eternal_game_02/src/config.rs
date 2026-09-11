@@ -4,6 +4,10 @@
 //! - `L` loads it back.
 //! - `cargo run -- --replay [file] [steps]` runs it headlessly and prints the
 //!   geometry and the ball's exact path, so a reported bug can be reproduced.
+//!
+//! Only the bounding box of non-empty cells is written, so a small drawing
+//! makes a small file.
+
 use std::fs;
 
 use bevy::prelude::*;
@@ -12,7 +16,7 @@ use crate::ball::{Ball, Outcome, Run, Tuning};
 use crate::grid::{Cell, Grid};
 use crate::paint::{Mode, Placement};
 
-/// Where `F5` writes and `F9` / `--replay` read by default.
+/// Where `Y` writes and `L` / `--replay` read by default.
 pub const CONFIG_PATH: &str = "debug_config.txt";
 
 fn cell_char(cell: Cell) -> char {
@@ -34,11 +38,31 @@ fn char_cell(c: char) -> Option<Cell> {
     }
 }
 
-/// Render the board as text. The ball (or any marker) shows as `@`.
-pub fn ascii(grid: &Grid, marker: Option<IVec2>) -> String {
-    let mut out = String::new();
-    for y in (0..grid.h).rev() {
+/// Bounding box of every non-empty cell, or `None` if the board is blank.
+fn content_bounds(grid: &Grid) -> Option<(IVec2, IVec2)> {
+    let mut min = IVec2::new(grid.w, grid.h);
+    let mut max = IVec2::new(-1, -1);
+    for y in 0..grid.h {
         for x in 0..grid.w {
+            if grid.get(IVec2::new(x, y)) != Some(Cell::Empty) {
+                min.x = min.x.min(x);
+                min.y = min.y.min(y);
+                max.x = max.x.max(x);
+                max.y = max.y.max(y);
+            }
+        }
+    }
+    (max.x >= 0).then_some((min, max))
+}
+
+/// Render the non-empty region as text. The marker (ball) shows as `@`.
+pub fn ascii(grid: &Grid, marker: Option<IVec2>) -> String {
+    let Some((min, max)) = content_bounds(grid) else {
+        return String::new();
+    };
+    let mut out = String::new();
+    for y in (min.y..=max.y).rev() {
+        for x in min.x..=max.x {
             let cell = IVec2::new(x, y);
             out.push(if Some(cell) == marker {
                 '@'
@@ -53,15 +77,23 @@ pub fn ascii(grid: &Grid, marker: Option<IVec2>) -> String {
 
 /// Serialise the whole state to the text format.
 pub fn serialize(grid: &Grid, place: Option<IVec2>, tuning: &Tuning) -> String {
+    let (min, max) = content_bounds(grid).unwrap_or((IVec2::ZERO, IVec2::ZERO));
+
     let mut out = String::new();
-    out.push_str("# eternal_game_02 config v1\n");
+    out.push_str("# eternal_game_02 config v2\n");
     out.push_str(&format!("start_charge {}\n", tuning.start_charge));
     match place {
         Some(p) => out.push_str(&format!("place {} {}\n", p.x, p.y)),
         None => out.push_str("place none\n"),
     }
-    out.push_str(&format!("grid {} {}\n", grid.w, grid.h));
-    out.push_str(&ascii(grid, place));
+    out.push_str(&format!("origin {} {}\n", min.x, min.y));
+    out.push_str(&format!("grid {} {}\n", max.x - min.x + 1, max.y - min.y + 1));
+    for y in (min.y..=max.y).rev() {
+        for x in min.x..=max.x {
+            out.push(cell_char(grid.get(IVec2::new(x, y)).unwrap_or(Cell::Empty)));
+        }
+        out.push('\n');
+    }
     out
 }
 
@@ -69,6 +101,7 @@ pub fn serialize(grid: &Grid, place: Option<IVec2>, tuning: &Tuning) -> String {
 pub fn parse(text: &str) -> Option<(Grid, Option<IVec2>, Tuning)> {
     let mut start_charge = 0.0;
     let mut place = None;
+    let mut origin = IVec2::ZERO;
     let mut dims: Option<(i32, i32)> = None;
     let mut rows: Vec<&str> = Vec::new();
 
@@ -85,6 +118,10 @@ pub fn parse(text: &str) -> Option<(Grid, Option<IVec2>, Tuning)> {
                 let y: i32 = it.next()?.parse().ok()?;
                 place = Some(IVec2::new(x, y));
             }
+        } else if let Some(rest) = line.strip_prefix("origin ") {
+            let mut it = rest.split_whitespace();
+            origin.x = it.next()?.parse().ok()?;
+            origin.y = it.next()?.parse().ok()?;
         } else if let Some(rest) = line.strip_prefix("grid ") {
             let mut it = rest.split_whitespace();
             let w: i32 = it.next()?.parse().ok()?;
@@ -101,24 +138,16 @@ pub fn parse(text: &str) -> Option<(Grid, Option<IVec2>, Tuning)> {
     }
 
     let mut grid = Grid::new(Handle::default());
-    grid.w = w;
-    grid.h = h;
-    grid.cells = vec![Cell::Empty; (w * h) as usize];
     // Rows are printed top (max y) first.
     for (row, line) in rows.iter().enumerate() {
-        let y = h - 1 - row as i32;
-        for (x, ch) in line.chars().enumerate() {
-            if x as i32 >= w {
-                break;
-            }
+        let y = origin.y + (h - 1 - row as i32);
+        for (x, ch) in line.chars().take(w as usize).enumerate() {
             if let Some(cell) = char_cell(ch) {
-                grid.set(IVec2::new(x as i32, y), cell);
+                grid.set(IVec2::new(origin.x + x as i32, y), cell);
             }
         }
     }
-    grid.dirty = true;
-    // The surface is derived; rebuild it from the solids so a hand-written
-    // config (solids + empties only) loads too.
+    // The surface is derived, so a config only really needs the solids.
     grid.rebuild_surface();
 
     Some((grid, place, Tuning { start_charge }))
@@ -194,6 +223,7 @@ pub fn replay(path: &str, max_steps: usize) {
             "{i:4}: {from:?} -> {:?} dir={:?} charge={:.1}",
             ball.cell, ball.dir, ball.charge
         );
+        println!("{}", ascii(&grid, Some(ball.cell)));
     }
     println!("outcome: {:?}", run.outcome);
     println!("{}", ascii(&grid, Some(ball.cell)));
@@ -211,11 +241,12 @@ mod tests {
         }
         let tuning = Tuning { start_charge: 4.0 };
         let text = serialize(&grid, Some(IVec2::new(19, 20)), &tuning);
+        // Cropped to the shape, not the whole 160x120 board.
+        assert!(text.lines().count() < 20, "should be cropped:\n{text}");
 
         let (back, place, loaded_tuning) = parse(&text).expect("parses");
         assert_eq!(place, Some(IVec2::new(19, 20)));
         assert_eq!(loaded_tuning.start_charge, 4.0);
-        // Solids survive and the surface is regenerated from them.
         assert_eq!(back.get(IVec2::new(20, 15)), Some(Cell::Solid));
         assert!(back.is_track(IVec2::new(19, 15)));
     }

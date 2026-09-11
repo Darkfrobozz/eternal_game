@@ -177,7 +177,6 @@ pub fn start_run(run: &mut Run, grid: &Grid, start: IVec2, charge: f32) {
 /// One tile of movement. Public so the headless replay can drive it.
 pub(crate) fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
     let from = ball.cell;
-    let behind = from - ball.dir;
 
     // Work out which connected solid mass we are following (first move only).
     if ball.component.is_none() {
@@ -192,6 +191,10 @@ pub(crate) fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
     }
     let component = ball.component.unwrap();
     let previous_dir = ball.moved.then_some(ball.dir);
+    // On the first move there is no "behind" yet, and the heading is chosen
+    // from the solid so the ball always sets off clockwise (solid on the right).
+    let heading = previous_dir.unwrap_or_else(|| initial_heading(run, component, from));
+    let behind = previous_dir.map(|d| from - d);
 
     // Movement is orthogonal only. Follow the contour with a right-hand rule:
     // take a right turn (clockwise) if one exists, else go straight, else left,
@@ -199,7 +202,7 @@ pub(crate) fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
     let mut best: Option<(f32, IVec2, bool)> = None; // key, cell, is_trail
     for d in NEIGHBORS4 {
         let next = ball.cell + d;
-        if next == behind || !grid.is_track(next) || !run.route.contains(&next) {
+        if Some(next) == behind || !grid.is_track(next) || !run.route.contains(&next) {
             continue;
         }
 
@@ -213,10 +216,18 @@ pub(crate) fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
         }
 
         let is_trail = grid.get(next) == Some(Cell::Trail);
-        let angle = turn(ball.dir.as_vec2(), d.as_vec2());
-        // Prefer: fresh surface, then clockwise (right) over straight over left.
+        let angle = turn(heading.as_vec2(), d.as_vec2());
+        // Prefer right (clockwise) > straight > left > reverse. The reverse can
+        // only happen on the first move (there is no "behind" yet), and
+        // atan2(-0.0, -1.0) = -pi would otherwise score it as most clockwise.
         let counterclockwise = if angle > 0.0 { 1.0 } else { 0.0 };
+        let reverse = if angle.abs() > std::f32::consts::FRAC_PI_2 + 0.1 {
+            1.0
+        } else {
+            0.0
+        };
         let key = if is_trail { 1000.0 } else { 0.0 }
+            + reverse * 20.0
             + counterclockwise * 10.0
             + (angle + std::f32::consts::PI) * 0.001;
         if best.is_none_or(|(bk, _, _)| key < bk) {
@@ -299,6 +310,26 @@ fn turn(from: Vec2, to: Vec2) -> f32 {
     let dot = from.dot(to);
     let cross = from.x * to.y - from.y * to.x;
     cross.atan2(dot)
+}
+
+/// Pick the starting heading so the solid sits on the ball's right (clockwise).
+fn initial_heading(run: &Run, component: usize, cell: IVec2) -> IVec2 {
+    let mut best = IVec2::X;
+    let mut best_score = -1;
+    for h in NEIGHBORS4 {
+        // "Right" of heading `h` is `h` rotated clockwise 90 degrees.
+        let right = IVec2::new(h.y, -h.x);
+        let probes = [cell + right, cell + h + right, cell - h + right];
+        let score = probes
+            .iter()
+            .filter(|c| run.components.get(c) == Some(&component))
+            .count() as i32;
+        if score > best_score {
+            best_score = score;
+            best = h;
+        }
+    }
+    best
 }
 
 #[cfg(test)]
