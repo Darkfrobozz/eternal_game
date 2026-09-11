@@ -25,23 +25,36 @@ That is once the ball is infinitely looping (reaching the same position with mor
 Cell values in the array: `0` empty, `1` solid (painted by the pen), `2` surface
 (auto-grown around solids), `3` trail (where the ball has been).
 
-- The pen draws `1`s. Every adjacent empty cell becomes a `2`.
-- Movement is orthogonal only. The ball follows the 8-connected solid mass it
-  started on (its `component`) and uses a right-hand rule (right > straight >
-  left, never reversing).
-- Charge is per move: a **vertical** step is signed by its direction (down
-  `+1`, up `-1`). A **horizontal** step is normally `0`, but if it follows a
-  vertical it is converted to that vertical's sign — the **combo**. Charge
-  hitting zero ends the run.
-- A run is won when the ball reaches a previously visited cell with at least
-  the charge it had on the previous visit (a self-sustaining loop).
+- **Solids are the source of truth.** `Grid.solids: HashSet<IVec2>` holds every
+  wall. `Grid::paint` only inserts/removes from that set and raises
+  `solids_dirty`; `Grid::regenerate_surfaces` rebuilds every `2` from the solids
+  (`apply_solids` runs it right after painting). There is no incremental surface
+  bookkeeping.
+- **Rendering.** One `Image` (`GRID_W`×`GRID_H`, one pixel per cell) blitted to
+  one stretched `Sprite` with nearest sampling. `sync_image` copies `cells`
+  into the texture while `dirty`.
+- **Movement is orthogonal only** (`NEIGHBORS4`). The ball follows the
+  8-connected solid component it started on and uses a right-hand rule
+  (right > straight > left, never reversing). `Grid::reachable` is a
+  4-connected flood fill of the route; a step must stay on the same component.
+- **Charge, per move:**
+  - vertical: down `+1`, up `-1`;
+  - horizontal: takes the **preceding vertical's** sign if it directly follows a
+    vertical (the **combo**: `d+r`/`d+l` `+1`, `u+r`/`u+l` `-1`), otherwise `-1`
+    (flat ground costs).
+  - Charge clamps at 0; hitting 0 ends the run (`Stuck`).
+- **Win:** the ball re-enters a cell it *actually* visited (`Run.visits`) with
+  charge ≥ the charge recorded there on first arrival.
+- **Start:** `find_start` (topmost surface cell) or a placed start
+  (`Placement.start`). The initial heading is derived from the solid anchor so
+  the ball always sets off clockwise.
 
 ## Controls
 
 Normal (play-only): `Space` pen / run, left-drag draws solids, right-drag
 erases, `C` clears. The charge readout and controller hint are hidden; the
 player infers charge from the arrows (green accumulates, orange consumes) and
-the ball's battery colour (grey when depleted, hue shifting as it charges).
+the ball's battery colour (grey depleted, hue shifting as it charges).
 
 `H` toggles **debug / map-editor mode**, which shows the HUD and enables:
 
@@ -53,34 +66,92 @@ the ball's battery colour (grey when depleted, hue shifting as it charges).
 
 ## Levels
 
-`levels/*.txt` are loaded with the config format. Level geometry (every
-non-empty cell at load) is **locked**: the player can draw their own strokes
-but cannot erase the level. `Tab` cycles levels; the debug HUD shows the
-current file name. A level's `place` and `start_charge` are its starting
-condition.
+`levels/*.txt` use the config format. On load, `lock_solids` records the level's
+**solid** cells so the eraser cannot remove them (the derived surface is not
+locked — but since it is derived, erasing a surface cell is a no-op anyway).
+`Tab` cycles levels; the debug HUD shows the current file name. A level's
+`place` and `start_charge` are its starting condition.
+
+- `levels/01.txt` — a plain vertical wall. **Currently impossible** (see
+  Handoff).
+- `levels/02.txt` — a descending spiral that closes net-positive and wins.
 
 ## Debugging / replay
 
 - `Y` in-game saves the current drawing, ball placement and start charge to
   `debug_config.txt`.
-- `L` loads it back.
-- `cargo run -- --replay [file] [steps]` runs it headlessly and prints the board
-  and the ball's exact path, step by step, so a reported bug can be reproduced.
+- `L` loads it back (this one is *not* locked, so it stays editable).
+- `cargo run -- --replay [file] [steps]` runs a config headlessly and prints the
+  board, every step (with charge), and the outcome. It prints a cropped ASCII
+  frame after each step. Use it to reproduce any reported bug.
 
-The config is plain text: `#` solid, `+` surface, `o` trail, `.` empty. Only the
-solids and the ball placement really matter; the surface is rebuilt on load.
+Config is plain text: `#` solid, `+` surface, `o` trail, `.` empty. Only the
+solids and ball placement matter; the surface is rebuilt on load. It is written
+`v2`, cropped to the bounding box with an `origin` line; the loader also accepts
+old full-grid files (no `origin`).
 
-## Potential ideas (parked)
+## Handoff notes (for the next agent)
 
-- **Ball divergence.** At a fork in the route, instead of picking one arm,
-  split the ball: spawn a clone down every branch and collapse them back to one
-  when the branches reconverge. See the git history on the `eternal_game_02`
-  branch for a prototype. The blocker is that the 8-connected surface produces
-  many *fake* forks (diagonal vs. staircase paths that are really the same
-  route), so it needs a single-width route generation first. It would also need
-  a decision on how splitting affects charge and what the win condition is.
-- **Contour-tracing the route.** Derive a single ordered boundary loop from the
-  solid cells (Moore neighbourhood tracing) instead of growing a band, which
-  would remove route ambiguity at the source.
+### Repo / build
 
+- The project lives in the **outer** git repo `/home/darkfrobozz/weekend_jams`
+  on branch **`eternal_game_02`** (each game gets its own branch; commits are
+  prefixed `Eternal Game 02:`).
+- `target` is a symlink to `../game_01_animations/target` so the Bevy build
+  cache is shared — `cargo build` takes seconds. Don't delete it casually.
+- `cargo test` (13 tests) and `cargo run`. WSLg needs `WAYLAND_DISPLAY=` blank;
+  `.cargo/config.toml` already forces that.
 
+### Code map
+
+- `src/main.rs` — app wiring, window, camera zoom/pan, `--replay` entry point.
+- `src/grid.rs` — `Grid` (cells, `solids`, `locked`, image), painting, surface
+  regeneration, reachability, coordinate helpers, solid components.
+- `src/ball.rs` — `Ball`, `Run`, `Tuning`, movement + charge, arrows, battery
+  colour, HUD text.
+- `src/paint.rs` — `Mode`, `Brush`, `Placement`, `Debug`, mouse painting, mode
+  switching, HUD visibility.
+- `src/config.rs` — save/load/`parse`/`serialize`, `Levels`, headless replay.
+- `src/grid.rs`/`ball.rs` tests are the behavioural spec — read them first.
+
+### Key design decisions
+
+1. **Orthogonal-only movement.** Diagonal moves were removed. A diagonal is
+   encoded as a two-step combo; the *horizontal* step carries the extra charge.
+2. **The grid is one array, not entities.** No per-cell ECS; `solids` is the
+   authoritative set and surface is a pure function of it.
+3. **Levels lock solids only.** The eraser checks the target coordinate against
+   `Grid.locked`; the pen is always allowed.
+4. **The HUD is hidden by default.** Only `H` reveals charge/controls; the game
+   communicates charge through arrows + ball colour.
+
+### Known issues / open questions
+
+- **The win check is weak when `start_charge` is 0.** A completing loop returns
+  with `≥ 0` because charge clamps at 0 and a drain ends the run, so *any* loop
+  that completes currently wins. A net-zero loop should probably be a draw, not
+  a win. Consider comparing to the charge at the **start of the lap**, or
+  requiring `>` rather than `≥`.
+- **`levels/01.txt` is impossible.** Its loop has 27 consuming steps and 26
+  gaining steps → net `-1` per lap, so it always returns one short. It is a good
+  test case. Likely fix: make a flat that follows a flat inherit the last
+  vertical's sign (propagate the combo through horizontal runs), which would
+  balance 2-cell caps.
+- **Combo only applies to the first flat after a vertical.** A run of `k`
+  horizontals gives the first the vertical's sign and the rest `-1`. This is the
+  source of the off-by-one above.
+- **No explicit start direction.** The heading is always derived (clockwise from
+  the anchor). A level cannot yet say "start facing left".
+- **`Y` saves to `debug_config.txt`, not back to the level file.** Making a
+  level is save-then-copy. A "save to current level" key would help.
+- **Erasing surface is a no-op** (it regenerates). Only solids are editable.
+
+### Parked ideas
+
+- **Ball divergence.** At a fork, split the ball (clone per branch) and collapse
+  on reconvergence. A prototype exists in git history; it was parked because the
+  8-connected band produces lots of *fake* forks (diagonal vs. staircase).
+  With orthogonal-only movement this may now be worth revisiting.
+- **Contour tracing.** Derive one ordered boundary loop from the solids (Moore
+  tracing) instead of a band, for unambiguous routes.
+- **"Save to current level"** and a proper level picker/toolbar.
