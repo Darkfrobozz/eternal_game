@@ -97,8 +97,9 @@ pub fn serialize(grid: &Grid, place: Option<IVec2>, tuning: &Tuning) -> String {
     out
 }
 
-/// Parse the text format back into a runnable state.
-pub fn parse(text: &str) -> Option<(Grid, Option<IVec2>, Tuning)> {
+/// Parse the text format back into a runnable state. `image` is the live grid
+/// texture handle (the headless replay passes the default handle).
+pub fn parse(text: &str, image: Handle<Image>) -> Option<(Grid, Option<IVec2>, Tuning)> {
     let mut start_charge = 0.0;
     let mut place = None;
     let mut origin = IVec2::ZERO;
@@ -106,7 +107,8 @@ pub fn parse(text: &str) -> Option<(Grid, Option<IVec2>, Tuning)> {
     let mut rows: Vec<&str> = Vec::new();
 
     for line in text.lines() {
-        if line.starts_with('#') || line.trim().is_empty() {
+        // Only the header uses `# `; a solid row is `#` with no space after it.
+        if line.starts_with("# ") || line.trim().is_empty() {
             continue;
         }
         if let Some(rest) = line.strip_prefix("start_charge ") {
@@ -137,7 +139,7 @@ pub fn parse(text: &str) -> Option<(Grid, Option<IVec2>, Tuning)> {
         return None;
     }
 
-    let mut grid = Grid::new(Handle::default());
+    let mut grid = Grid::new(image);
     // Rows are printed top (max y) first.
     for (row, line) in rows.iter().enumerate() {
         let y = origin.y + (h - 1 - row as i32);
@@ -169,7 +171,10 @@ pub fn debug_io(
         }
     }
     if keys.just_pressed(KeyCode::KeyL) {
-        match fs::read_to_string(CONFIG_PATH).ok().and_then(|t| parse(&t)) {
+        match fs::read_to_string(CONFIG_PATH)
+            .ok()
+            .and_then(|t| parse(&t, grid.image.clone()))
+        {
             Some((loaded, loaded_place, loaded_tuning)) => {
                 *grid = loaded;
                 place.start = loaded_place;
@@ -189,7 +194,7 @@ pub fn replay(path: &str, max_steps: usize) {
         eprintln!("cannot read {path}");
         return;
     };
-    let Some((mut grid, place, tuning)) = parse(&text) else {
+    let Some((mut grid, place, tuning)) = parse(&text, Handle::default()) else {
         eprintln!("could not parse {path}");
         return;
     };
@@ -244,10 +249,20 @@ mod tests {
         // Cropped to the shape, not the whole 160x120 board.
         assert!(text.lines().count() < 20, "should be cropped:\n{text}");
 
-        let (back, place, loaded_tuning) = parse(&text).expect("parses");
+        let (back, place, loaded_tuning) = parse(&text, Handle::default()).expect("parses");
         assert_eq!(place, Some(IVec2::new(19, 20)));
         assert_eq!(loaded_tuning.start_charge, 4.0);
         assert_eq!(back.get(IVec2::new(20, 15)), Some(Cell::Solid));
         assert!(back.is_track(IVec2::new(19, 15)));
+    }
+
+    /// The loader must keep the live texture handle, or `sync_image` writes
+    /// into a placeholder texture.
+    #[test]
+    fn parse_uses_the_given_image_handle() {
+        let text = "# eternal_game_02 config v2\nstart_charge 0\nplace none\norigin 0 0\ngrid 1 1\n#\n";
+        let handle = Handle::<Image>::default();
+        let (grid, _, _) = parse(text, handle.clone()).expect("parses");
+        assert_eq!(grid.image.id(), handle.id());
     }
 }

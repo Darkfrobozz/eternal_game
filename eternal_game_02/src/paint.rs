@@ -195,6 +195,10 @@ pub fn sync_image(mut grid: ResMut<Grid>, mut images: ResMut<Assets<Image>>) {
     let Some(data) = image.data.as_mut() else {
         return;
     };
+    // Guard against a stale/placeholder texture (e.g. a bad load).
+    if data.len() < (grid.w * grid.h * 4) as usize {
+        return;
+    }
 
     for y in 0..grid.h {
         for x in 0..grid.w {
