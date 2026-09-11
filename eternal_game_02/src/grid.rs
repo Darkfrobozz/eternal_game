@@ -130,14 +130,16 @@ impl Grid {
     /// adjacent empty cell; `Cell::Empty` erases and cleans up surface that no
     /// longer touches any solid.
     pub fn paint(&mut self, cell: IVec2, value: Cell) {
-        if self.locked.contains(&cell) {
+        // The eraser must not remove level geometry, but the pen may still add
+        // on top of it (e.g. building off the level's surface).
+        if value == Cell::Empty && self.locked.contains(&cell) {
             return;
         }
         self.set(cell, value);
         match value {
             Cell::Solid => {
                 for n in self.neighbors(cell).collect::<Vec<_>>() {
-                    if !self.locked.contains(&n) && self.get(n) == Some(Cell::Empty) {
+                    if self.get(n) == Some(Cell::Empty) {
                         self.set(n, Cell::Surface);
                     }
                 }
@@ -376,16 +378,22 @@ mod tests {
         assert_eq!(grid.count(Cell::Surface), 25 - 9);
     }
 
-    /// Level geometry is locked: the player can't paint over or erase it.
+    /// The eraser can't remove level geometry, but the pen can still draw
+    /// (including on top of the level's surface).
     #[test]
-    fn locked_cells_cannot_be_edited() {
+    fn locked_cells_cannot_be_erased() {
         let mut grid = grid();
         grid.paint(IVec2::new(5, 5), Cell::Solid);
         grid.lock_non_empty();
 
         grid.paint(IVec2::new(5, 5), Cell::Empty);
         assert_eq!(grid.get(IVec2::new(5, 5)), Some(Cell::Solid));
-        // ...but the player's own drawing still works.
+
+        // Pen still works, even on a locked surface cell.
+        grid.paint(IVec2::new(4, 5), Cell::Solid);
+        assert_eq!(grid.get(IVec2::new(4, 5)), Some(Cell::Solid));
+
+        // And on empty ground.
         grid.paint(IVec2::new(10, 10), Cell::Solid);
         assert_eq!(grid.get(IVec2::new(10, 10)), Some(Cell::Solid));
     }
