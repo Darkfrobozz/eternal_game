@@ -295,24 +295,20 @@ pub(crate) fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
     }
     run.visits.entry(ball.cell).or_insert(ball.charge);
 
-    // Move charge. A vertical move is signed by its direction (down builds,
-    // up spends). A horizontal (dy = 0) is normally zero, but if it follows a
-    // vertical it is converted to that vertical's sign — the combo.
+    // Move charge. Verticals are signed by direction. A horizontal is level, so
+    // it consumes by default (-1), but a horizontal right after a descent is
+    // converted to a gain (+1) — the combo.
     let d = next - ball.cell;
-    let combo = d.y == 0 && previous_dir.is_some_and(|p| p.y != 0);
-    let charge = if combo {
-        let previous = previous_dir.unwrap();
-        if previous.y < 0 {
-            CHARGE_PER_CELL
-        } else {
-            -CHARGE_PER_CELL
-        }
-    } else if d.y < 0 {
+    let after_vertical = previous_dir.is_some_and(|p| p.y != 0);
+    let combo = d.y == 0 && after_vertical;
+    let charge = if d.y < 0 {
         CHARGE_PER_CELL
     } else if d.y > 0 {
         -CHARGE_PER_CELL
+    } else if previous_dir.is_some_and(|p| p.y < 0) {
+        CHARGE_PER_CELL
     } else {
-        0.0
+        -CHARGE_PER_CELL
     };
     ball.charge += charge;
     if ball.charge < 0.0 {
@@ -359,7 +355,6 @@ pub fn manual_step(
 
 /// Draw the movement itinerary: an arrow at every cell the ball left.
 /// - plain accumulating step -> green, plain consuming step -> orange,
-/// - neutral (dy 0 with no preceding vertical) -> pale blue,
 /// - gaining combo -> gold, costly combo -> red.
 pub fn draw_itinerary(run: Res<Run>, grid: Res<Grid>, mut gizmos: Gizmos) {
     for m in &run.itinerary {
@@ -373,10 +368,8 @@ pub fn draw_itinerary(run: Res<Run>, grid: Res<Grid>, mut gizmos: Gizmos) {
             }
         } else if m.charge > 0.0 {
             Color::srgb(0.30, 0.85, 0.35)
-        } else if m.charge < 0.0 {
-            Color::srgb(1.0, 0.55, 0.10)
         } else {
-            Color::srgb(0.55, 0.75, 0.95)
+            Color::srgb(1.0, 0.55, 0.10)
         };
         gizmos
             .arrow_2d(start, end, color)
@@ -547,6 +540,25 @@ mod tests {
         assert_eq!(ball.charge, TEST_CHARGE - 2.0);
         let last = run.itinerary.last().expect("a move");
         assert!(last.combo && last.charge < 0.0, "up-then-right is a costly combo");
+    }
+
+    /// Flat ground (horizontal with no preceding vertical) still consumes.
+    #[test]
+    fn flat_ground_costs() {
+        let mut grid = grid();
+        for x in 5..=10 {
+            grid.set(IVec2::new(x, 5), Cell::Surface);
+            grid.set(IVec2::new(x, 6), Cell::Solid);
+        }
+        let mut run = Run::default();
+        run.route = grid.reachable(IVec2::new(5, 5));
+        run.components = grid.solid_components();
+        run.visits.insert(IVec2::new(5, 5), TEST_CHARGE);
+        let mut ball = Ball::new(IVec2::new(5, 5), TEST_CHARGE);
+
+        step_once(&mut grid, &mut run, &mut ball);
+        assert!(!run.itinerary.last().unwrap().combo);
+        assert_eq!(ball.charge, TEST_CHARGE - 1.0);
     }
 
     /// With no orthogonal move available the ball stops and never reverses.
