@@ -93,6 +93,8 @@ pub struct MoveRecord {
     /// True when this was a combo (a horizontal converted by the preceding
     /// vertical).
     pub combo: bool,
+    /// True when that combo consumed charge (ascending) rather than gained.
+    pub costly: bool,
 }
 
 /// Per-run bookkeeping: first-arrival charge at each cell, the flood-filled
@@ -326,6 +328,7 @@ pub(crate) fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
         cell: from,
         dir: d,
         combo,
+        costly: combo && charge < 0.0,
     });
 }
 
@@ -354,18 +357,23 @@ pub fn manual_step(
     }
 }
 
-/// Draw the movement itinerary: an arrow at every cell the ball left, gold for
-/// combo moves so they visibly stand out.
+/// Draw the movement itinerary: an arrow at every cell the ball left. Plain
+/// moves are pale blue, a gaining combo is gold, and a costly (ascending)
+/// combo is red.
 pub fn draw_itinerary(run: Res<Run>, grid: Res<Grid>, mut gizmos: Gizmos) {
     for m in &run.itinerary {
         let start = grid.cell_to_world(m.cell);
-        let end = start + m.dir.as_vec2() * (CELL_PX * 0.85);
-        let color = if m.combo {
+        let end = start + m.dir.as_vec2() * (CELL_PX * 0.9);
+        let color = if m.combo && m.costly {
+            Color::srgb(1.0, 0.25, 0.2)
+        } else if m.combo {
             Color::srgb(1.0, 0.80, 0.2)
         } else {
             Color::srgb(0.55, 0.75, 0.95)
         };
-        gizmos.arrow_2d(start, end, color);
+        gizmos
+            .arrow_2d(start, end, color)
+            .with_tip_length(CELL_PX * 0.45);
     }
 }
 
@@ -530,7 +538,8 @@ mod tests {
         step_once(&mut grid, &mut run, &mut ball); // up: -1
         step_once(&mut grid, &mut run, &mut ball); // right after up: combo -1
         assert_eq!(ball.charge, TEST_CHARGE - 2.0);
-        assert!(run.itinerary.last().expect("a move").combo);
+        let last = run.itinerary.last().expect("a move");
+        assert!(last.combo && last.costly, "up-then-right is a costly combo");
     }
 
     /// With no orthogonal move available the ball stops and never reverses.
