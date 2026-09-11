@@ -4,3 +4,11 @@
 # blank it out here to fall back to WSLg's stable X11 path. `force` overrides
 # the value inherited from the shell.
 WAYLAND_DISPLAY = { value = "", force = true }
+
+# WSLg has no ALSA sound card, but it does run a PulseAudio server (see
+# /mnt/wslg/PulseServer). Route ALSA's default device through it (see
+# ~/.asoundrc) using a locally-extracted copy of the `pulse` plugin from
+# libasound2-plugins, which is not installed system-wide. `relative` resolves
+# the path against this file's parent directory, so `cargo run` finds the
+# plugin without any shell setup. The directory is gitignored.
+ALSA_PLUGIN_DIR = { value = ".alsa-plugins", relative = true }

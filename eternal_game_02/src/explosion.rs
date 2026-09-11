@@ -20,6 +20,7 @@ use bevy::sprite::Anchor;
 use crate::ball::{Ball, Outcome, Run};
 use crate::grid::{CELL_PX, Cell, Grid};
 use crate::screen::{ScreenAnchor, ScreenText};
+use crate::sfx::{self, Sfx};
 
 /// World z of the burst, above the ball (5) and the grid (0).
 const BURST_Z: f32 = 8.0;
@@ -120,6 +121,7 @@ pub fn show_victory(
 /// fire exactly once per run; it re-arms when the next run starts.
 pub fn spawn_explosion(
     run: Res<Run>,
+    sfx: Res<Sfx>,
     mut grid: ResMut<Grid>,
     mut commands: Commands,
     balls: Query<(Entity, &Ball)>,
@@ -152,8 +154,10 @@ pub fn spawn_explosion(
         grid.dissolve_origin = ball.cell;
         grid.dissolve_radius = radius;
         spawn_level_explosion(&mut commands, &grid, center);
+        sfx::play(&mut commands, &sfx.victory);
     } else {
         spawn_burst(&mut commands, center, 16);
+        sfx::play(&mut commands, &sfx.death);
     }
 }
 

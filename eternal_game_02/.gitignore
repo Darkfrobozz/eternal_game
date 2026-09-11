@@ -1,5 +1,6 @@
 /target
 /debug_config.txt
 /progress.txt
+/.alsa-plugins/
 __pycache__/
 *.pyc

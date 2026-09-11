@@ -4,9 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-# Only pull in what a 2D game needs (no 3D, UI or audio yet). `png` lets the
-# asset server load the sprites in assets/sprites/.
-bevy = { version = "0.19", default-features = false, features = ["2d", "png"] }
+# Only pull in what a 2D game needs. `png` loads the sprites in assets/sprites/,
+# and `bevy_audio` + `wav` play the sound effects in assets/sfx/. The rain bed
+# is a pre-looped WAV (no MP3 decoder needed on the audio thread).
+bevy = { version = "0.19", default-features = false, features = ["2d", "png", "bevy_audio", "wav"] }
 
 # Bevy is slow in debug builds; optimise our dependencies so the game runs
 # smoothly while keeping our own code fast to recompile.

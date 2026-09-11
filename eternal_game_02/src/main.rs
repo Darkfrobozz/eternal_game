@@ -12,6 +12,7 @@ mod menu;
 mod paint;
 mod rain;
 mod screen;
+mod sfx;
 mod tutorial;
 
 use bevy::input::mouse::MouseWheel;
@@ -38,6 +39,7 @@ use rain::{
     update_rain, update_splash,
 };
 use screen::position_screen_text;
+use sfx::setup_sfx;
 use tutorial::{
     Tutorial, apply_tutorial_visibility, draw_tutorial, setup_tutorial, track_tutorial,
 };
@@ -92,6 +94,7 @@ fn main() {
                 setup_solid_tile,
                 setup_background,
                 setup_rain_assets,
+                setup_sfx,
                 setup_levels,
                 setup_camera,
                 setup_tutorial,
