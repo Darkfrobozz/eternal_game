@@ -50,17 +50,22 @@ into the array. No `solids` set, no `solids_dirty`, no regeneration pass.
     empty battery can still roll downhill, since that gains charge.
 - **Winning: the loop keeps going — then overloads.** The first `(cell,
   anchor)` state the ball re-enters (`Run.visits`) is its loop closure. Arriving
-  there with charge ≥ the charge recorded on first arrival sets `Run.solved` and
-  counts a lap; every lap multiplies `Run.speed`, so an eternal loop visibly
-  accelerates (capped at [`MAX_SPEED`](src/ball.rs)). A closure that misses the
-  guarantee no longer stops the ball as `Stuck` — it is doomed but runs on
-  until the battery empties and it explodes. Once a solved loop completes
-  [`VICTORY_LAPS`](src/ball.rs) (8) laps it overloads as `Outcome::Victory`.
-  The ball then detonates the **whole level**: a shockwave sized to the level's
-  bounds, a chain reaction over every cell it occupies, and a dissolve that
-  burns the level to ash and then wipes the grid completely clean. When the
-  blast finishes the next game level loads automatically; if there is none, a
-  **VICTORY** banner appears.
+  there with charge **strictly greater** than on the first visit sets
+  `Run.solved` and counts a lap; every lap multiplies `Run.speed`, so an eternal
+  loop visibly accelerates (capped at [`MAX_SPEED`](src/ball.rs)).
+  - A **break-even** closure (exactly the same charge) can never win, and would
+    otherwise circle forever, so it is charged one unit of **friction** and the
+    recorded level is lowered to match — each further lap bleeds another unit
+    until the battery empties and it explodes.
+  - A **net-loss** closure needs no help: it drains and explodes on its own, and
+    never sets `Run.solved`.
+
+  Once a solved loop completes [`VICTORY_LAPS`](src/ball.rs) (8) laps it
+  overloads as `Outcome::Victory`. The ball then detonates the **whole level**:
+  a shockwave sized to the level's bounds, a chain reaction over every cell it
+  occupies, and a dissolve that burns the level to ash and then wipes the grid
+  completely clean. When the blast finishes the next game level loads
+  automatically; if there is none, a **VICTORY** banner appears.
 - **Anything that ends the ball explodes.** `Depleted` (empty battery),
   `Stuck` (no open cell around its anchor) and `Victory` all despawn the ball.
   The first two leave a single burst; victory leaves a level-wide blast that
@@ -258,24 +263,17 @@ old full-grid files (no `origin`).
   ball hits a wall and must change direction, which wants a squash/anticipation
   beat) — are not distinguished yet; they currently use the same straight roll.
 
-- **The win check is weak when `start_charge` is 0.** A completing loop returns
-  with `≥ 0`, so *any* loop that completes is marked solved. A net-zero loop
-  should probably be a draw, not a win. Consider comparing to the charge at the
-  **start of the lap**, or requiring `>` rather than `≥`.
 - **`levels/01.txt` is impossible.** Its loop has 27 consuming steps and 26
-  gaining steps → net `-1` per lap, so it always returns one short. It is a good
-  test case. Likely fix: make a flat that follows a flat inherit the last
-  vertical's sign (propagate the combo through horizontal runs), which would
-  balance 2-cell caps.
+  gaining steps → net `-1` per lap, so it never gains. With the strict win check
+  a loop must be net **positive**, so a break-even loop needs rebalancing too.
+  It is a good test case. Likely fix: make a flat that follows a flat inherit
+  the last vertical's sign (propagate the combo through horizontal runs), which
+  would balance 2-cell caps.
 - **Combo only applies to the first flat after a vertical.** A run of `k`
   horizontals gives the first the vertical's sign and the rest `-1`. This is the
   source of the off-by-one above.
 - **No explicit start direction.** The initial anchor is derived from the local
   solids (clockwise), so a level cannot yet say "start facing left".
-- **A sealed pocket counts as a loop.** A cell that only shuttles back and forth
-  is a two-state `(cell, anchor)` cycle, so it now closes and eventually wins
-  (e.g. `debug_config.txt`'s two-cell cavity). Whether that should be a "draw"
-  rather than a win is the same open question as the weak zero-charge check.
 - **`Y` saves to `debug_config.txt`, not back to the level file.** Making a
   level is save-then-copy. A "save to current level" key would help.
 

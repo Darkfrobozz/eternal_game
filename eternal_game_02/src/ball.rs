@@ -482,16 +482,30 @@ pub(crate) fn step_once(grid: &Grid, run: &mut Run, ball: &mut Ball) {
         );
         return;
     }
-    let arrival = ball.charge + charge;
 
     // Re-entering a `(cell, anchor)` state is the loop closure: the next move
-    // is deterministic, so it must repeat from here. Meeting the charge
-    // guarantee solves the level; missing it leaves the ball doomed.
+    // is deterministic, so it must repeat from here. The level is solved only
+    // when the loop *gains* energy — the charge arriving must be strictly
+    // greater than on the first visit.
+    //
+    // A break-even loop is the pathological case: left alone it would circle
+    // forever, never winning and never running out. Charge it one unit of
+    // friction, and lower the recorded level to match, so each further lap is
+    // again break-even and the loop bleeds charge until it empties. A net loss
+    // needs no help — it drains and explodes on its own.
+    let mut arrival = ball.charge + charge;
     if let Some(best_charge) = run.visits.get(&(next, anchor)).copied() {
         run.closure.get_or_insert((next, anchor));
-        if arrival + f32::EPSILON >= best_charge && !run.solved {
-            run.solved = true;
-            info!("Loop closed at {next:?}: the level is solved");
+        if !run.solved {
+            let gain = arrival - best_charge;
+            if gain > 0.0 {
+                run.solved = true;
+                info!("Loop closed at {next:?}: the level is solved");
+            } else if gain.abs() < 0.5 {
+                arrival -= 1.0;
+                run.visits.insert((next, anchor), arrival);
+                info!("Loop closed at {next:?} at break-even — friction applied");
+            }
         }
     }
 
@@ -1069,64 +1083,48 @@ mod tests {
         assert_eq!(run.outcome, Outcome::Depleted);
     }
 
-    /// A loop that meets its charge guarantee is marked solved, but the ball
-    /// keeps looping (and getting faster) instead of ending the run.
+    /// A net-positive loop (level 02) is solved, keeps looping, and eventually
+    /// overloads into the victory.
     #[test]
-    fn solved_loop_keeps_running() {
-        let mut grid = grid();
-        for x in 10..=13 {
-            for y in 10..=18 {
-                if x == 10 || x == 13 || y == 10 || y == 18 {
-                    grid.paint(IVec2::new(x, y), Cell::Solid);
-                }
-            }
-        }
-        let start = IVec2::new(11, 17);
+    fn net_positive_loop_solves_and_wins() {
+        let text = std::fs::read_to_string("levels/02.txt").expect("level 02");
+        let (mut grid, place, _) = crate::config::parse(&text, Handle::default()).expect("parses");
+        let start = place.expect("placed start");
 
         let mut run = Run::default();
         start_run(&mut run, &grid);
-        let mut ball = Ball::new(start, TEST_CHARGE);
+        let mut ball = Ball::new(start, 0.0);
 
-        while run.outcome == Outcome::Running && run.laps < 3 {
+        // Close the loop: it must gain energy, so it is solved.
+        for _ in 0..400 {
+            if run.solved {
+                break;
+            }
             step_once(&mut grid, &mut run, &mut ball);
         }
-
-        assert!(run.solved, "the box loop should solve");
-        assert!(run.laps >= 3, "laps should keep being counted");
-        assert!(run.speed > 1.0, "each lap should speed the ball up");
+        assert!(run.solved, "level 02 gains energy every lap");
         assert_eq!(
             run.outcome,
             Outcome::Running,
             "a solved loop must keep running"
         );
-    }
 
-    /// An eternal loop eventually overloads and clears the level.
-    #[test]
-    fn solved_loop_eventually_wins() {
-        let mut grid = grid();
-        for x in 10..=13 {
-            for y in 10..=18 {
-                if x == 10 || x == 13 || y == 10 || y == 18 {
-                    grid.paint(IVec2::new(x, y), Cell::Solid);
-                }
+        // It keeps looping, accelerating, and eventually overloads.
+        for _ in 0..3000 {
+            if run.outcome != Outcome::Running {
+                break;
             }
+            step_once(&mut grid, &mut run, &mut ball);
         }
-        let start = IVec2::new(11, 17);
-
-        let mut run = Run::default();
-        start_run(&mut run, &grid);
-        let mut ball = Ball::new(start, TEST_CHARGE);
-        run_for(&mut grid, &mut run, &mut ball, 2000);
-
-        assert!(run.solved, "it must solve before it can overload");
-        assert_eq!(run.outcome, Outcome::Victory, "the loop should clear the level");
+        assert!(run.laps >= VICTORY_LAPS);
+        assert!(run.speed > 1.0);
+        assert_eq!(run.outcome, Outcome::Victory);
     }
 
-    /// A tiny sealed pocket is a two-state cycle, so the `(cell, anchor)` loop
-    /// condition closes it (the old cell-only `visits` never could).
+    /// A break-even pocket has zero net energy, so it never wins; friction
+    /// bleeds a charge per lap until the loop empties and bursts.
     #[test]
-    fn sealed_pocket_is_a_closed_loop() {
+    fn sealed_pocket_bleeds_out() {
         // The debug_config diamond: a 2-cell vertical cavity in a solid ring.
         let mut grid = grid();
         for solid in [
@@ -1144,10 +1142,10 @@ mod tests {
         let mut run = Run::default();
         start_run(&mut run, &grid);
         let mut ball = Ball::new(start, 0.0);
-        run_for(&mut grid, &mut run, &mut ball, 200);
+        run_for(&mut grid, &mut run, &mut ball, 500);
 
-        assert!(run.solved, "the pocket cycle should close");
-        assert_eq!(run.outcome, Outcome::Victory);
+        assert!(!run.solved, "a break-even loop never gains");
+        assert_eq!(run.outcome, Outcome::Depleted, "friction drains it");
     }
 
     /// A forward move is a full signed turn from the cell left to the cell
