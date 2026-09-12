@@ -33,17 +33,14 @@ Cell values in the array: `0` empty, `1` solid (painted by the pen), `2` surface
 - **Rendering.** One `Image` (`GRID_W`×`GRID_H`, one pixel per cell) blitted to
   one stretched `Sprite` with nearest sampling. `sync_image` copies `cells`
   into the texture while `dirty`.
-- **Movement is orthogonal only** (`NEIGHBORS4`). The ball follows the
-  8-connected solid component it started on and uses a right-hand rule
-  (right > straight > left, never reversing in normal travel). `Grid::reachable`
-  is a 4-connected flood fill of the route; a step must stay on the same
-  component. Dead ends are **not** avoided: the ball rolls into a one-cell
-  pocket, then **bounces** — `step_once` clears the run's visited-cell history
-  and the ball's "behind", so it is re-seeded as a fresh start
-  and turns around to climb back out. Only a cell with no track neighbour at
-  all ends the run as `Stuck`. This keeps the ball hugging the contour (no
-  floating over the surface gap beside a pocket) while stopping a start-up
-  spur, such as level 02's launch slot, from killing the loop.
+- **Movement is orthogonal only** (`NEIGHBORS4`). The ball carries two cells:
+  its position and a solid **anchor** (stick point) — and nothing else, no
+  trail and no previous direction. Each step it advances to the next cell
+  around the anchor clockwise; if that cell is the anchor's own solid, it
+  **pivots** the anchor to that corner and retries, so a wall end is rounded
+  inside the same step rather than pausing at a dead end. The move is therefore
+  a pure function of `(cell, anchor)`, which keeps the ball hugging one contour.
+  `Stuck` only happens when there is no surface at all around the anchor.
 - **Charge, per move:**
   - vertical: down `+1`, up `-1`;
   - horizontal: takes the **preceding vertical's** sign if it directly follows a
@@ -52,9 +49,9 @@ Cell values in the array: `0` empty, `1` solid (painted by the pen), `2` surface
   - A move the battery cannot pay for ends the run as `Depleted` *before* the
     ball moves: it bursts into a flash and sparks (see `src/explosion.rs`). An
     empty battery can still roll downhill, since that gains charge.
-- **Winning: the loop keeps going — then overloads.** The first cell the ball
-  *actually* visits twice (`Run.visits`) is its loop closure. Returning there
-  with charge ≥ the charge recorded on first arrival sets `Run.solved` and
+- **Winning: the loop keeps going — then overloads.** The first `(cell,
+  anchor)` state the ball re-enters (`Run.visits`) is its loop closure. Arriving
+  there with charge ≥ the charge recorded on first arrival sets `Run.solved` and
   counts a lap; every lap multiplies `Run.speed`, so an eternal loop visibly
   accelerates (capped at [`MAX_SPEED`](src/ball.rs)). A closure that misses the
   guarantee no longer stops the ball as `Stuck` — it is doomed but runs on
@@ -66,16 +63,15 @@ Cell values in the array: `0` empty, `1` solid (painted by the pen), `2` surface
   blast finishes the next game level loads automatically; if there is none, a
   **VICTORY** banner appears.
 - **Anything that ends the ball explodes.** `Depleted` (empty battery),
-  `Stuck` (no track neighbour at all, even with no "behind") and `Victory` all
-  despawn the ball. The first two leave a single burst; victory leaves a
-  level-wide blast that consumes the level and clears the whole grid. After a
-  `Depleted` or `Stuck` burst the game drops straight back into **edit mode**
-  (the ball is gone), so the player can fix the
-  drawing and roll again; victory instead advances to the next level.
-  A dead end is not one of these: it bounces the ball (see above).
+  `Stuck` (no surface around its anchor) and `Victory` all despawn the ball.
+  The first two leave a single burst; victory leaves a level-wide blast that
+  consumes the level and clears the whole grid. After a `Depleted` or `Stuck`
+  burst the game drops straight back into **edit mode** (the ball is gone), so
+  the player can fix the drawing and roll again; victory instead advances to the
+  next level.
 - **Start:** `find_start` (topmost surface cell) or a placed start
-  (`Placement.start`). The initial heading is derived from the solid anchor so
-  the ball always sets off clockwise.
+  (`Placement.start`). The initial anchor is the solid on the right of the
+  anchor-derived heading, so the ball always sets off clockwise.
 
 ## Controls
 
@@ -112,9 +108,9 @@ nestling against the surface it hugs.
 When the battery is empty and the ball asks for a move it cannot afford, the
 ball explodes instead of taking the step, and the game returns to edit mode
 automatically, clearing the run, so you can adjust the drawing and roll again
-(no need to press `E`). A dead end is different: the ball rolls into the pocket,
-the run's visited history is cleared and it turns around to climb back out, so a
-start-up slot no longer kills the loop. Once a
+(no need to press `E`). A wall end is not a dead stop: the ball pivots its
+anchor around the corner and keeps rolling, so a start-up slot no longer kills
+the loop. Once a
 loop is solved the ball keeps looping and speeds up a little every lap, and
 after a handful of laps the overload detonates the level, wipes the grid and
 loads the next level (or shows VICTORY when it was the last).
@@ -225,7 +221,7 @@ old full-grid files (no `origin`).
   zoom/pan (used by the menu and tutorial).
 - `src/tutorial.rs` — the three-step control tutorial.
 - `src/grid.rs` — `Grid` (cells, `solids`, `locked`, image), painting, surface
-  regeneration, reachability, coordinate helpers, solid components.
+  regeneration, coordinate helpers, solid components.
 - `src/ball.rs` — `Ball`, `Run`, `Tuning`, movement + charge, loop/speed,
   arrows, battery colour, HUD text.
 - `src/explosion.rs` — death bursts (`Depleted`/`Stuck`), the victory
@@ -250,6 +246,10 @@ old full-grid files (no `origin`).
    feature set and avoids `bevy_ui`. `ScreenText` keeps the menu and tutorial
    legible under camera zoom/pan by re-reading the camera every frame and
    compensating position and scale.
+6. **The ball is a two-cell state machine.** `(cell, anchor)` — position plus
+   the solid stick point — fully determines the next move. The ball steps
+   clockwise around the anchor, pivoting it around wall ends. With no trail or
+   direction history, re-entering a `(cell, anchor)` pair is provably a loop.
 
 ### Known issues / open questions
 
@@ -272,8 +272,12 @@ old full-grid files (no `origin`).
 - **Combo only applies to the first flat after a vertical.** A run of `k`
   horizontals gives the first the vertical's sign and the rest `-1`. This is the
   source of the off-by-one above.
-- **No explicit start direction.** The heading is always derived (clockwise from
-  the anchor). A level cannot yet say "start facing left".
+- **No explicit start direction.** The initial anchor is derived from the local
+  solids (clockwise), so a level cannot yet say "start facing left".
+- **A sealed pocket counts as a loop.** A cell that only shuttles back and forth
+  is a two-state `(cell, anchor)` cycle, so it now closes and eventually wins
+  (e.g. `debug_config.txt`'s two-cell cavity). Whether that should be a "draw"
+  rather than a win is the same open question as the weak zero-charge check.
 - **`Y` saves to `debug_config.txt`, not back to the level file.** Making a
   level is save-then-copy. A "save to current level" key would help.
 - **Erasing surface is a no-op** (it regenerates). Only solids are editable.
@@ -284,6 +288,4 @@ old full-grid files (no `origin`).
   on reconvergence. A prototype exists in git history; it was parked because the
   8-connected band produces lots of *fake* forks (diagonal vs. staircase).
   With orthogonal-only movement this may now be worth revisiting.
-- **Contour tracing.** Derive one ordered boundary loop from the solids (Moore
-  tracing) instead of a band, for unambiguous routes.
 - **"Save to current level"** and a proper level picker/toolbar.

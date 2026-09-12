@@ -484,13 +484,8 @@ pub fn replay(path: &str, max_steps: usize) {
 
     let mut run = Run::default();
     let mut ball = Ball::new(start, tuning.start_charge);
-    crate::ball::start_run(&mut run, &grid, start, tuning.start_charge);
-    println!(
-        "start={start:?} charge={} route={} component={:?}",
-        tuning.start_charge,
-        run.route.len(),
-        ball.component,
-    );
+    crate::ball::start_run(&mut run, &grid);
+    println!("start={start:?} charge={}", tuning.start_charge);
 
     for i in 0..max_steps {
         if run.outcome != Outcome::Running {

@@ -1,15 +1,15 @@
 //! Phase 2: the ball that walks the generated surface.
 //!
 //! The ball is a plain ECS entity; only its [`Ball`] component matters to the
-//! simulation. It steps cell-by-cell along the flood-filled route, always
-//! hugging it clockwise.
+//! simulation. It steps cell-by-cell clockwise around a solid anchor, laying no
+//! trail: `(cell, anchor)` is the whole state.
 //!
 //! Energy == accumulated distance, measured in cells moved:
 //! * moving **down** accumulates `CHARGE_PER_CELL` per step,
 //! * moving **up or level** (`dy >= 0`) consumes the same amount,
 //! * charge hitting zero ends the run.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{ImageLoaderSettings, ImageSampler};
@@ -77,15 +77,17 @@ impl Default for Tuning {
     }
 }
 
-/// The ball. `cell` is its grid position, `dir` its last step direction.
+/// The ball. `cell` is its grid position, `dir` its last step direction, and
+/// `anchor` the solid cell it is currently stuck to (its "stick point"). The
+/// next move is a pure function of `(cell, anchor)`.
 #[derive(Component)]
 pub struct Ball {
     pub cell: IVec2,
     pub dir: IVec2,
     pub charge: f32,
-    /// Connected solid mass the ball is following. Keeps it on one contour
-    /// when two lines run close enough for their surfaces to touch.
-    pub component: Option<usize>,
+    /// The solid cell the ball is stuck to. `None` until the first step
+    /// resolves it from the adjacent solids.
+    pub anchor: Option<IVec2>,
     /// Whether the ball has made a real move yet (so the first heading isn't
     /// mistaken for a previous direction when detecting turn combos).
     moved: bool,
@@ -111,7 +113,7 @@ impl Ball {
             cell,
             dir: IVec2::X,
             charge,
-            component: None,
+            anchor: None,
             moved: false,
             prev: cell,
             spin: 0.0,
@@ -157,13 +159,12 @@ pub struct MoveRecord {
     pub charge: f32,
 }
 
-/// Per-run bookkeeping: first-arrival charge at each cell, the flood-filled
-/// route, the solid components, the itinerary of moves taken, and how many
+/// Per-run bookkeeping: the first-arrival charge at each `(cell, anchor)`
+/// state, the solid components, the itinerary of moves taken, and how many
 /// laps the ball has completed.
 #[derive(Resource)]
 pub struct Run {
-    pub visits: HashMap<IVec2, f32>,
-    pub route: HashSet<IVec2>,
+    pub visits: HashMap<(IVec2, IVec2), f32>,
     /// Every solid cell labelled with its 8-connected component id.
     pub components: HashMap<IVec2, usize>,
     pub itinerary: Vec<MoveRecord>,
@@ -171,9 +172,9 @@ pub struct Run {
     /// Set for one frame when `Tab` enters run mode, so that first press only
     /// takes manual control instead of also nudging the ball.
     pub just_entered: bool,
-    /// The cell where the ball first closed its loop. Each time it returns
-    /// here a lap is complete. `None` until the first loop closure.
-    pub closure: Option<IVec2>,
+    /// The `(cell, anchor)` state where the ball first closed its loop. Each
+    /// time it returns here a lap is complete. `None` until then.
+    pub closure: Option<(IVec2, IVec2)>,
     /// True once a loop closure met its charge guarantee — the level is solved.
     pub solved: bool,
     /// Laps completed since the run began.
@@ -189,7 +190,6 @@ impl Default for Run {
     fn default() -> Self {
         Self {
             visits: HashMap::new(),
-            route: HashSet::new(),
             components: HashMap::new(),
             itinerary: Vec::new(),
             outcome: Outcome::default(),
@@ -200,17 +200,6 @@ impl Default for Run {
             speed: 1.0,
             total_moves: 0,
         }
-    }
-}
-
-impl Run {
-    /// Reset the run's visited-cell history so the ball can climb back out of a
-    /// dead end and treat the pocket as a fresh start (what the removed grid
-    /// trail used to do). The itinerary is kept, so the drawn arrows stay put.
-    fn rewind(&mut self, cell: IVec2, charge: f32) {
-        self.visits.clear();
-        self.visits.insert(cell, charge);
-        self.closure = None;
     }
 }
 
@@ -407,12 +396,11 @@ pub fn step_ball(
     }
 }
 
-/// Set up a fresh run on `grid` starting at `start`.
-pub fn start_run(run: &mut Run, grid: &Grid, start: IVec2, charge: f32) {
-    run.route = grid.reachable(start);
+/// Set up a fresh run on `grid`. The ball's anchor is resolved lazily on its
+/// first step (it needs the solid components).
+pub fn start_run(run: &mut Run, grid: &Grid) {
     run.components = grid.solid_components();
     run.visits.clear();
-    run.visits.insert(start, charge);
     run.itinerary.clear();
     run.outcome = Outcome::Running;
     run.closure = None;
@@ -426,98 +414,50 @@ pub fn start_run(run: &mut Run, grid: &Grid, start: IVec2, charge: f32) {
 pub(crate) fn step_once(grid: &Grid, run: &mut Run, ball: &mut Ball) {
     let from = ball.cell;
 
-    // Work out which connected solid mass we are following (first move only).
-    if ball.component.is_none() {
-        ball.component = NEIGHBORS8
-            .iter()
-            .find_map(|offset| run.components.get(&(from + *offset)).copied());
-        if ball.component.is_none() {
+    // The anchor is the solid the ball is stuck to. Resolve it on the first
+    // step (clockwise, so the solid sits on the ball's right) and record the
+    // starting state so the loop condition can see it.
+    if ball.anchor.is_none() {
+        let Some(anchor) = initial_anchor(run, from) else {
             run.outcome = Outcome::Stuck;
             info!("Ball at {from:?} has no adjacent solid to follow");
             return;
-        }
-    }
-    let component = ball.component.unwrap();
-    let previous_dir = ball.moved.then_some(ball.dir);
-    // On the first move there is no "behind" yet, and the heading is chosen
-    // from the solid so the ball always sets off clockwise (solid on the right).
-    let heading = previous_dir.unwrap_or_else(|| initial_heading(run, component, from));
-    let behind = previous_dir.map(|d| from - d);
-
-    // Movement is orthogonal only. Follow the contour with a right-hand rule:
-    // take a right turn (clockwise) if one exists, else go straight, else left,
-    // never reversing.
-    let mut best: Option<(f32, IVec2)> = None; // key, cell
-    for d in NEIGHBORS4 {
-        let next = ball.cell + d;
-        if Some(next) == behind || !grid.is_track(next) || !run.route.contains(&next) {
-            continue;
-        }
-
-        // Stay on the solid component we are following: the destination must
-        // still hug that same mass.
-        let on_component = NEIGHBORS8
-            .iter()
-            .any(|offset| run.components.get(&(next + *offset)) == Some(&component));
-        if !on_component {
-            continue;
-        }
-
-        let angle = turn(heading.as_vec2(), d.as_vec2());
-        // Prefer right (clockwise) > straight > left > reverse. The reverse can
-        // only happen on the first move (there is no "behind" yet), and
-        // atan2(-0.0, -1.0) = -pi would otherwise score it as most clockwise.
-        let counterclockwise = if angle > 0.0 { 1.0 } else { 0.0 };
-        let reverse = if angle.abs() > std::f32::consts::FRAC_PI_2 + 0.1 {
-            1.0
-        } else {
-            0.0
         };
-        // Follow the contour literally: the ball rolls into a pocket rather
-        // than floating over it. The dead end is handled by the bounce below.
-        let key = reverse * 20.0
-            + counterclockwise * 10.0
-            + (angle + std::f32::consts::PI) * 0.001;
-        if best.is_none_or(|(bk, _)| key < bk) {
-            best = Some((key, next));
-        }
+        ball.anchor = Some(anchor);
+        run.visits.entry((from, anchor)).or_insert(ball.charge);
     }
 
-    let Some((_, next)) = best else {
-        // A dead end is not fatal. The ball has rolled into a pocket: clear its
-        // visited-cell history and treat the pocket as a fresh start, so it
-        // turns around and climbs back out. Only bounce once per cell — if it
-        // cannot move even with no "behind", it really is stuck.
-        if ball.moved {
-            run.rewind(ball.cell, ball.charge);
-            ball.moved = false;
-            info!("Dead end at {:?}: climbing back out", ball.cell);
-            return;
+    // Follow the contour clockwise: step to the next cell around the anchor.
+    // If that cell is the anchor's own solid, the ball pivots its anchor to
+    // that corner and retries. The move is a pure function of `(cell, anchor)`,
+    // so no direction history (and no dead-end bounce) is needed.
+    let mut anchor = ball.anchor.unwrap();
+    let mut next = from;
+    let mut stepped = false;
+    for _ in 0..NEIGHBORS8.len() {
+        let target = anchor + cw45(next - anchor);
+        match grid.get(target) {
+            Some(Cell::Solid) => anchor = target, // pivot around the corner
+            Some(Cell::Surface) => {
+                next = target;
+                stepped = true;
+                break;
+            }
+            _ => break,
         }
+    }
+    if !stepped {
         run.outcome = Outcome::Stuck;
-        info!("Ball stuck at {:?}: no track ahead", ball.cell);
+        info!("Ball stuck at {from:?}: no track around the anchor");
         return;
-    };
-
-    // A cell the ball has actually walked before (recorded in `visits`) is its
-    // loop closure. Closing a loop no longer ends the run: meeting the charge
-    // guarantee marks the level solved and the ball loops on (accelerating
-    // every lap); missing it leaves the ball doomed, to roll on until it
-    // explodes.
-    if let Some(best_charge) = run.visits.get(&next).copied() {
-        // The first cell the ball revisits is where its loop closes; every
-        // later return here completes another lap.
-        run.closure.get_or_insert(next);
-        if ball.charge + f32::EPSILON >= best_charge && !run.solved {
-            run.solved = true;
-            info!("Loop closed at {:?}: the level is solved", next);
-        }
     }
+    ball.anchor = Some(anchor);
 
-    // Work out what the move would cost *before* committing to it. Verticals
-    // are signed by direction. A horizontal is level, so it consumes by default
-    // (-1), but a horizontal right after a descent is converted to a gain (+1)
-    // — the combo.
+    let previous_dir = ball.moved.then_some(ball.dir);
+
+    // Work out what the move costs before committing. Verticals are signed by
+    // direction; a horizontal is level, so it consumes by default (-1), but a
+    // horizontal right after a descent is converted to a gain (+1) — the combo.
     let d = next - ball.cell;
     let after_vertical = previous_dir.is_some_and(|p| p.y != 0);
     let combo = d.y == 0 && after_vertical;
@@ -542,6 +482,18 @@ pub(crate) fn step_once(grid: &Grid, run: &mut Run, ball: &mut Ball) {
         );
         return;
     }
+    let arrival = ball.charge + charge;
+
+    // Re-entering a `(cell, anchor)` state is the loop closure: the next move
+    // is deterministic, so it must repeat from here. Meeting the charge
+    // guarantee solves the level; missing it leaves the ball doomed.
+    if let Some(best_charge) = run.visits.get(&(next, anchor)).copied() {
+        run.closure.get_or_insert((next, anchor));
+        if arrival + f32::EPSILON >= best_charge && !run.solved {
+            run.solved = true;
+            info!("Loop closed at {next:?}: the level is solved");
+        }
+    }
 
     // Set up this move's rolling animation: a full signed turn from the cell
     // being left to the one being entered, around the normal of the surface
@@ -562,15 +514,11 @@ pub(crate) fn step_once(grid: &Grid, run: &mut Run, ball: &mut Ball) {
         wrap_pi(goal - ball.core_angle).clamp(-CORE_ALIGN_PER_CELL, CORE_ALIGN_PER_CELL);
 
     ball.prev = ball.cell;
-
-    // Record the charge we arrived with, for the loop-closure guarantee.
-    run.visits.entry(ball.cell).or_insert(ball.charge);
-
-    ball.charge += charge;
+    ball.charge = arrival;
     ball.dir = d;
     ball.cell = next;
     ball.moved = true;
-    run.visits.entry(next).or_insert(ball.charge);
+    run.visits.entry((next, anchor)).or_insert(arrival);
     run.itinerary.push(MoveRecord {
         cell: from,
         dir: d,
@@ -579,12 +527,12 @@ pub(crate) fn step_once(grid: &Grid, run: &mut Run, ball: &mut Ball) {
     });
     run.total_moves += 1;
 
-    // Returning to the loop-closure cell completes a lap. Every lap runs
+    // Returning to the loop-closure state completes a lap. Every lap runs
     // faster, so a solved loop visibly accelerates toward its eternal state.
-    if run.closure == Some(next) {
+    if run.closure == Some((next, anchor)) {
         run.laps += 1;
         run.speed = (run.speed * SPEEDUP_PER_LAP).min(MAX_SPEED);
-        info!("Lap {} at {:?}: speed x{:.2}", run.laps, next, run.speed);
+        info!("Lap {} at {next:?}: speed x{:.2}", run.laps, run.speed);
         // An eternal (solved) loop eventually overloads and takes the whole
         // level with it. A doomed loop never gets here — it has no solution.
         if run.solved && run.laps >= VICTORY_LAPS && run.outcome == Outcome::Running {
@@ -834,13 +782,6 @@ pub fn draw_itinerary(
     }
 }
 
-/// Signed turn from `from` to `to`: negative is clockwise (world +y is up).
-fn turn(from: Vec2, to: Vec2) -> f32 {
-    let dot = from.dot(to);
-    let cross = from.x * to.y - from.y * to.x;
-    cross.atan2(dot)
-}
-
 /// Pick the starting heading so the solid sits on the ball's right (clockwise).
 fn initial_heading(run: &Run, component: usize, cell: IVec2) -> IVec2 {
     let mut best = IVec2::X;
@@ -861,9 +802,48 @@ fn initial_heading(run: &Run, component: usize, cell: IVec2) -> IVec2 {
     best
 }
 
+/// Rotate an 8-neighbour offset 45 degrees clockwise (world +y is up), so a
+/// ball stepping through the ring walks clockwise around its anchor.
+fn cw45(offset: IVec2) -> IVec2 {
+    match (offset.x, offset.y) {
+        (1, 0) => IVec2::new(1, -1),
+        (1, -1) => IVec2::new(0, -1),
+        (0, -1) => IVec2::new(-1, -1),
+        (-1, -1) => IVec2::new(-1, 0),
+        (-1, 0) => IVec2::new(-1, 1),
+        (-1, 1) => IVec2::new(0, 1),
+        (0, 1) => IVec2::new(1, 1),
+        (1, 1) => IVec2::new(1, 0),
+        _ => offset,
+    }
+}
+
+/// The solid stick point the ball starts on. Prefers the adjacent solid whose
+/// clockwise step is exactly the anchor-derived heading, so the ball sets off
+/// clockwise; falls back to any adjacent solid of the same mass.
+fn initial_anchor(run: &Run, cell: IVec2) -> Option<IVec2> {
+    let component = NEIGHBORS8
+        .iter()
+        .find_map(|offset| run.components.get(&(cell + *offset)).copied())?;
+    let heading = initial_heading(run, component, cell);
+    let preferred = NEIGHBORS8.iter().find_map(|offset| {
+        let anchor = cell + *offset;
+        (run.components.get(&anchor) == Some(&component)
+            && cw45(cell - anchor) - (cell - anchor) == heading)
+            .then_some(anchor)
+    });
+    preferred.or_else(|| {
+        NEIGHBORS8
+            .iter()
+            .map(|offset| cell + *offset)
+            .find(|anchor| run.components.get(anchor) == Some(&component))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
 
     /// Tests start with headroom so runs can begin on flat ground.
     const TEST_CHARGE: f32 = 10.0;
@@ -886,34 +866,45 @@ mod tests {
         grid.find_start().unwrap()
     }
 
-    /// The ball must always hug the same connected solid mass and never hop to
-    /// a parallel contour.
+    /// Paint a horizontal wall and return the top-surface start at its left end.
+    fn wall(grid: &mut Grid, from: i32, to: i32, y: i32) -> IVec2 {
+        for x in from..=to {
+            grid.paint(IVec2::new(x, y), Cell::Solid);
+        }
+        grid.regenerate_surfaces();
+        IVec2::new(from, y + 1)
+    }
+
+    /// Run until the outcome stops being `Running` or `limit` steps elapse.
+    fn run_for(grid: &mut Grid, run: &mut Run, ball: &mut Ball, limit: usize) {
+        for _ in 0..limit {
+            if run.outcome != Outcome::Running {
+                break;
+            }
+            step_once(grid, run, ball);
+        }
+    }
+
+    /// Every step the ball is adjacent to its anchor — it can never float off
+    /// onto a different contour.
     #[test]
-    fn painted_disk_contour_does_not_hop() {
+    fn ball_stays_on_its_anchor() {
         let mut grid = grid();
         let start = disk(&mut grid, 12.0);
-        let labels = grid.solid_components();
-        let component = *labels.values().next().unwrap();
         let mut run = Run::default();
-        run.route = grid.reachable(start);
-        run.components = labels;
-        run.visits.insert(start, TEST_CHARGE);
+        start_run(&mut run, &grid);
         let mut ball = Ball::new(start, TEST_CHARGE);
         let mut visited = HashSet::new();
 
-        for _ in 0..80 {
+        for _ in 0..120 {
             if run.outcome != Outcome::Running {
                 break;
             }
             step_once(&mut grid, &mut run, &mut ball);
-            if run.outcome != Outcome::Running {
-                break;
-            }
+            let anchor = ball.anchor.expect("anchor resolved");
             assert!(
-                NEIGHBORS8
-                    .iter()
-                    .any(|d| run.components.get(&(ball.cell + *d)) == Some(&component)),
-                "ball left the disk contour at {:?}",
+                NEIGHBORS8.iter().any(|d| ball.cell + *d == anchor),
+                "ball at {:?} left its anchor {anchor:?}",
                 ball.cell
             );
             visited.insert(ball.cell);
@@ -921,125 +912,99 @@ mod tests {
         assert!(visited.len() > 10, "ball barely moved: {}", visited.len());
     }
 
-    /// Two parallel lines one cell apart must not let the ball hop across at
-    /// the ends, where each line's surface touches the other's terminal solid.
+    /// Two parallel lines one cell apart: the ball stays anchored to the line
+    /// it started on and never hops to the other.
     #[test]
     fn parallel_lines_do_not_hop() {
         let mut grid = grid();
         for y in 10..=20 {
-            grid.set(IVec2::new(0, y), Cell::Solid);
-            grid.set(IVec2::new(2, y), Cell::Solid);
-            grid.set(IVec2::new(1, y), Cell::Surface);
+            grid.paint(IVec2::new(0, y), Cell::Solid);
+            grid.paint(IVec2::new(2, y), Cell::Solid);
         }
-        for x in 0..=2 {
-            grid.set(IVec2::new(x, 9), Cell::Surface);
-            grid.set(IVec2::new(x, 21), Cell::Surface);
-        }
+        grid.regenerate_surfaces();
 
         let mut run = Run::default();
-        run.route = grid.reachable(IVec2::new(1, 20));
-        run.components = grid.solid_components();
-        run.visits.insert(IVec2::new(1, 20), TEST_CHARGE);
+        start_run(&mut run, &grid);
         let mut ball = Ball::new(IVec2::new(1, 20), TEST_CHARGE);
-        ball.dir = IVec2::new(0, 1); // heading up
-        ball.component = run.components.get(&IVec2::new(0, 20)).copied(); // left line
-
         step_once(&mut grid, &mut run, &mut ball);
-        assert!(ball.cell.x <= 1, "hopped to the right line: {:?}", ball.cell);
-    }
+        let line = run.components[&ball.anchor.unwrap()];
 
-    /// A dead end no longer stops the ball: it clears its visited history and
-    /// turns around, climbing back out of the pocket. On a finite line that
-    /// means it shuttles until the battery runs out — it never ends as `Stuck`.
-    #[test]
-    fn dead_end_bounces_back_out() {
-        let mut grid = grid();
-        for x in 5..=10 {
-            grid.set(IVec2::new(x, 5), Cell::Surface);
-            grid.set(IVec2::new(x, 6), Cell::Solid);
-        }
-        let start = grid.find_start().unwrap();
-        assert_eq!(start, IVec2::new(5, 5));
-
-        let mut run = Run::default();
-        run.route = grid.reachable(start);
-        run.components = grid.solid_components();
-        run.visits.insert(start, TEST_CHARGE);
-        let mut ball = Ball::new(start, TEST_CHARGE);
-
-        // Five forward moves put the ball on the far end of the line.
-        for _ in 0..5 {
-            step_once(&mut grid, &mut run, &mut ball);
-        }
-        assert_eq!(ball.cell, IVec2::new(10, 5));
-
-        // The next call is the bounce: no move, but the run stays alive.
-        step_once(&mut grid, &mut run, &mut ball);
-        assert_eq!(run.outcome, Outcome::Running, "a dead end must not end the run");
-        assert_eq!(
-            ball.cell,
-            IVec2::new(10, 5),
-            "the bounce does not move the ball"
-        );
-
-        // And then it climbs back out, facing the way it came.
-        step_once(&mut grid, &mut run, &mut ball);
-        assert_eq!(ball.cell, IVec2::new(9, 5));
-        assert_eq!(ball.dir, IVec2::new(-1, 0));
-
-        // Shuttling between the two ends drains the battery, so a line with no
-        // loop ends as a charge-out rather than a stuck.
-        for _ in 0..100 {
+        for _ in 0..60 {
             if run.outcome != Outcome::Running {
                 break;
             }
             step_once(&mut grid, &mut run, &mut ball);
+            assert_eq!(
+                run.components[&ball.anchor.unwrap()],
+                line,
+                "hopped to the other line at {:?}",
+                ball.cell
+            );
         }
-        assert_eq!(run.outcome, Outcome::Depleted);
-        assert!(!run.solved, "a dead-end bounce must not solve anything");
+    }
+
+    /// A wall end is rounded without a paused step: the anchor pivots around the
+    /// corner while the ball keeps moving.
+    #[test]
+    fn anchor_rounds_the_corner() {
+        let mut grid = grid();
+        let start = wall(&mut grid, 5, 9, 5); // top surface at y=6, x=5..9
+        assert_eq!(start, IVec2::new(5, 6));
+
+        let mut run = Run::default();
+        start_run(&mut run, &grid);
+        let mut ball = Ball::new(start, TEST_CHARGE);
+
+        // Five eastward moves put the ball past the end of the wall.
+        for _ in 0..5 {
+            step_once(&mut grid, &mut run, &mut ball);
+        }
+        assert_eq!(ball.cell, IVec2::new(10, 6));
+
+        // The next move pivots around the end; it must not stall or reverse.
+        step_once(&mut grid, &mut run, &mut ball);
+        assert_eq!(run.outcome, Outcome::Running);
         assert!(
-            run.closure.is_none(),
-            "clearing the visited history on a bounce prevents a false loop closure"
+            ball.cell.x >= 10,
+            "should pivot around the end, not bounce back: {:?}",
+            ball.cell
         );
     }
 
-    /// A horizontal move takes the sign of the vertical move before it: here an
-    /// up step (-1) is followed by a horizontal converted to -1 (a combo).
+    /// A horizontal move takes the sign of the vertical before it: a flat after
+    /// a descent gains, a flat after a climb costs.
     #[test]
     fn horizontal_takes_preceding_sign() {
+        // A single solid cell makes the ball ring it, alternating vertical runs
+        // with horizontals.
         let mut grid = grid();
-        grid.set(IVec2::new(5, 5), Cell::Solid);
-        grid.set(IVec2::new(4, 5), Cell::Surface);
-        grid.set(IVec2::new(4, 6), Cell::Surface);
-        grid.set(IVec2::new(5, 6), Cell::Surface);
+        grid.paint(IVec2::new(5, 5), Cell::Solid);
+        grid.regenerate_surfaces();
 
         let mut run = Run::default();
-        run.route = grid.reachable(IVec2::new(4, 5));
-        run.components = grid.solid_components();
-        run.visits.insert(IVec2::new(4, 5), TEST_CHARGE);
-        let mut ball = Ball::new(IVec2::new(4, 5), TEST_CHARGE);
-        ball.dir = IVec2::new(0, 1);
+        start_run(&mut run, &grid);
+        let mut ball = Ball::new(IVec2::new(5, 6), TEST_CHARGE);
+        run_for(&mut grid, &mut run, &mut ball, 24);
 
-        step_once(&mut grid, &mut run, &mut ball); // up: -1
-        step_once(&mut grid, &mut run, &mut ball); // right after up: combo -1
-        assert_eq!(ball.charge, TEST_CHARGE - 2.0);
-        let last = run.itinerary.last().expect("a move");
-        assert!(last.combo && last.charge < 0.0, "up-then-right is a costly combo");
+        assert!(
+            run.itinerary.iter().any(|m| m.combo && m.charge > 0.0),
+            "a flat after a descent should gain"
+        );
+        assert!(
+            run.itinerary.iter().any(|m| m.combo && m.charge < 0.0),
+            "a flat after a climb should cost"
+        );
     }
 
     /// Flat ground (horizontal with no preceding vertical) still consumes.
     #[test]
     fn flat_ground_costs() {
         let mut grid = grid();
-        for x in 5..=10 {
-            grid.set(IVec2::new(x, 5), Cell::Surface);
-            grid.set(IVec2::new(x, 6), Cell::Solid);
-        }
+        let start = wall(&mut grid, 5, 9, 5);
+
         let mut run = Run::default();
-        run.route = grid.reachable(IVec2::new(5, 5));
-        run.components = grid.solid_components();
-        run.visits.insert(IVec2::new(5, 5), TEST_CHARGE);
-        let mut ball = Ball::new(IVec2::new(5, 5), TEST_CHARGE);
+        start_run(&mut run, &grid);
+        let mut ball = Ball::new(start, TEST_CHARGE);
 
         step_once(&mut grid, &mut run, &mut ball);
         assert!(!run.itinerary.last().unwrap().combo);
@@ -1051,20 +1016,16 @@ mod tests {
     #[test]
     fn empty_battery_explodes_instead_of_moving() {
         let mut grid = grid();
-        for x in 5..=10 {
-            grid.set(IVec2::new(x, 5), Cell::Surface);
-            grid.set(IVec2::new(x, 6), Cell::Solid);
-        }
+        let start = wall(&mut grid, 5, 9, 5);
+
         let mut run = Run::default();
-        run.route = grid.reachable(IVec2::new(5, 5));
-        run.components = grid.solid_components();
-        run.visits.insert(IVec2::new(5, 5), 0.0);
-        let mut ball = Ball::new(IVec2::new(5, 5), 0.0);
+        start_run(&mut run, &grid);
+        let mut ball = Ball::new(start, 0.0);
 
         step_once(&mut grid, &mut run, &mut ball);
 
         assert_eq!(run.outcome, Outcome::Depleted);
-        assert_eq!(ball.cell, IVec2::new(5, 5), "ball moved without paying");
+        assert_eq!(ball.cell, start, "ball moved without paying");
         assert!(
             run.itinerary.is_empty(),
             "a failed move must not be recorded"
@@ -1076,14 +1037,12 @@ mod tests {
     #[test]
     fn empty_battery_can_roll_downhill() {
         let mut grid = grid();
-        grid.set(IVec2::new(5, 5), Cell::Solid);
-        grid.set(IVec2::new(6, 5), Cell::Surface);
-        grid.set(IVec2::new(6, 4), Cell::Surface);
+        grid.paint(IVec2::new(5, 5), Cell::Solid);
+        grid.regenerate_surfaces();
 
         let mut run = Run::default();
-        run.route = grid.reachable(IVec2::new(6, 5));
-        run.components = grid.solid_components();
-        run.visits.insert(IVec2::new(6, 5), 0.0);
+        start_run(&mut run, &grid);
+        // Start east of the solid; the clockwise step is south, downhill.
         let mut ball = Ball::new(IVec2::new(6, 5), 0.0);
 
         step_once(&mut grid, &mut run, &mut ball);
@@ -1093,13 +1052,10 @@ mod tests {
         assert_eq!(ball.charge, 1.0);
     }
 
-    /// A loop that closes without meeting its charge guarantee no longer stops
-    /// as `Stuck`: the ball is doomed but runs on until the battery empties and
-    /// it explodes.
+    /// A charge-losing ring completes laps but never meets the guarantee, so it
+    /// runs on until the battery empties.
     #[test]
     fn doomed_loop_runs_until_it_explodes() {
-        // A square ring of surface around a 3x3 solid block. The ring loses
-        // charge every lap, so the guarantee can never be met.
         let mut grid = grid();
         for y in 5..8 {
             for x in 5..8 {
@@ -1110,31 +1066,19 @@ mod tests {
         let start = grid.find_start().unwrap();
 
         let mut run = Run::default();
+        start_run(&mut run, &grid);
         let mut ball = Ball::new(start, TEST_CHARGE);
-        start_run(&mut run, &grid, start, TEST_CHARGE);
-
-        for _ in 0..500 {
-            if run.outcome != Outcome::Running {
-                break;
-            }
-            step_once(&mut grid, &mut run, &mut ball);
-        }
+        run_for(&mut grid, &mut run, &mut ball, 500);
 
         assert!(!run.solved, "a charge-losing ring cannot be solved");
         assert!(run.laps >= 1, "the ball still completed a lap first");
-        assert_eq!(
-            run.outcome,
-            Outcome::Depleted,
-            "a doomed loop must run until it explodes"
-        );
+        assert_eq!(run.outcome, Outcome::Depleted);
     }
 
     /// A loop that meets its charge guarantee is marked solved, but the ball
     /// keeps looping (and getting faster) instead of ending the run.
     #[test]
     fn solved_loop_keeps_running() {
-        // A hollow 4x9 box: solid border with a 2-wide interior, the shape of
-        // the tutorial once its missing block has been drawn.
         let mut grid = grid();
         for x in 10..=13 {
             for y in 10..=18 {
@@ -1144,14 +1088,12 @@ mod tests {
             }
         }
         grid.regenerate_surfaces();
-        // Start inside the box, like the tutorial's placed start.
         let start = IVec2::new(11, 17);
 
         let mut run = Run::default();
+        start_run(&mut run, &grid);
         let mut ball = Ball::new(start, TEST_CHARGE);
-        start_run(&mut run, &grid, start, TEST_CHARGE);
 
-        // Run a few laps, stopping well before the victory overload.
         while run.outcome == Outcome::Running && run.laps < 3 {
             step_once(&mut grid, &mut run, &mut ball);
         }
@@ -1181,18 +1123,40 @@ mod tests {
         let start = IVec2::new(11, 17);
 
         let mut run = Run::default();
+        start_run(&mut run, &grid);
         let mut ball = Ball::new(start, TEST_CHARGE);
-        start_run(&mut run, &grid, start, TEST_CHARGE);
-
-        for _ in 0..2000 {
-            if run.outcome != Outcome::Running {
-                break;
-            }
-            step_once(&mut grid, &mut run, &mut ball);
-        }
+        run_for(&mut grid, &mut run, &mut ball, 2000);
 
         assert!(run.solved, "it must solve before it can overload");
         assert_eq!(run.outcome, Outcome::Victory, "the loop should clear the level");
+    }
+
+    /// A tiny sealed pocket is a two-state cycle, so the `(cell, anchor)` loop
+    /// condition closes it (the old cell-only `visits` never could).
+    #[test]
+    fn sealed_pocket_is_a_closed_loop() {
+        // The debug_config diamond: a 2-cell vertical cavity in a solid ring.
+        let mut grid = grid();
+        for solid in [
+            IVec2::new(77, 79),
+            IVec2::new(76, 78),
+            IVec2::new(78, 78),
+            IVec2::new(76, 77),
+            IVec2::new(78, 77),
+            IVec2::new(77, 76),
+        ] {
+            grid.paint(solid, Cell::Solid);
+        }
+        grid.regenerate_surfaces();
+        let start = IVec2::new(77, 78);
+
+        let mut run = Run::default();
+        start_run(&mut run, &grid);
+        let mut ball = Ball::new(start, 0.0);
+        run_for(&mut grid, &mut run, &mut ball, 200);
+
+        assert!(run.solved, "the pocket cycle should close");
+        assert_eq!(run.outcome, Outcome::Victory);
     }
 
     /// A forward move is a full signed turn from the cell left to the cell
@@ -1200,15 +1164,11 @@ mod tests {
     #[test]
     fn a_move_is_one_full_turn() {
         let mut grid = grid();
-        for x in 4..=8 {
-            grid.set(IVec2::new(x, 5), Cell::Solid);
-            grid.set(IVec2::new(x, 6), Cell::Surface);
-        }
+        let start = wall(&mut grid, 4, 8, 5);
+
         let mut run = Run::default();
-        run.route = grid.reachable(IVec2::new(4, 6));
-        run.components = grid.solid_components();
-        run.visits.insert(IVec2::new(4, 6), TEST_CHARGE);
-        let mut ball = Ball::new(IVec2::new(4, 6), TEST_CHARGE);
+        start_run(&mut run, &grid);
+        let mut ball = Ball::new(start, TEST_CHARGE);
 
         step_once(&mut grid, &mut run, &mut ball);
 
@@ -1238,8 +1198,8 @@ mod tests {
         let start = grid.find_start().unwrap();
 
         let mut run = Run::default();
+        start_run(&mut run, &grid);
         let mut ball = Ball::new(start, TEST_CHARGE);
-        start_run(&mut run, &grid, start, TEST_CHARGE);
 
         let mut moved_total = 0.0;
         for _ in 0..24 {
@@ -1272,8 +1232,8 @@ mod tests {
         let start = grid.find_start().unwrap();
 
         let mut run = Run::default();
+        start_run(&mut run, &grid);
         let mut ball = Ball::new(start, TEST_CHARGE);
-        start_run(&mut run, &grid, start, TEST_CHARGE);
 
         let mut signs = Vec::new();
         for _ in 0..20 {
@@ -1292,23 +1252,20 @@ mod tests {
         );
     }
 
-    /// With no orthogonal move available the ball stops and never reverses.
+    /// A ball walled in with no surface around its anchor is stuck.
     #[test]
-    fn stuck_when_no_orthogonal_move() {
+    fn stuck_when_fully_enclosed() {
         let mut grid = grid();
-        grid.set(IVec2::new(10, 10), Cell::Solid);
-        grid.set(IVec2::new(10, 11), Cell::Surface);
-        grid.set(IVec2::new(11, 10), Cell::Surface);
+        for offset in NEIGHBORS8 {
+            grid.set(IVec2::new(10, 10) + offset, Cell::Solid);
+        }
+        grid.set(IVec2::new(10, 10), Cell::Surface);
 
         let mut run = Run::default();
-        run.route = grid.reachable(IVec2::new(10, 11));
-        run.components = grid.solid_components();
-        run.visits.insert(IVec2::new(10, 11), TEST_CHARGE);
-        let mut ball = Ball::new(IVec2::new(10, 11), TEST_CHARGE);
-        ball.dir = IVec2::new(0, 1);
+        start_run(&mut run, &grid);
+        let mut ball = Ball::new(IVec2::new(10, 10), TEST_CHARGE);
 
         step_once(&mut grid, &mut run, &mut ball);
         assert_eq!(run.outcome, Outcome::Stuck);
     }
 }
-

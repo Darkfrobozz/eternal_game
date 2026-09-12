@@ -219,7 +219,7 @@ pub fn handle_mode(
                 .or_else(|| grid.find_start());
             match chosen {
                 Some(start) => {
-                    ball::start_run(&mut run, &grid, start, tuning.start_charge);
+                    ball::start_run(&mut run, &grid);
                     ball::spawn_ball(
                         &mut commands,
                         &grid,

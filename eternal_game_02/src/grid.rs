@@ -300,28 +300,6 @@ impl Grid {
         (max.x >= 0).then_some((min, max))
     }
 
-    /// Flood fill the orthogonal track reachable from `start`. This is the
-    /// ball's route.
-    pub fn reachable(&self, start: IVec2) -> HashSet<IVec2> {
-        let mut seen = HashSet::new();
-        if !self.is_track(start) {
-            return seen;
-        }
-        seen.insert(start);
-        let mut stack = vec![start];
-        while let Some(cell) = stack.pop() {
-            for d in NEIGHBORS4 {
-                let next = cell + d;
-                if seen.contains(&next) || !self.is_track(next) {
-                    continue;
-                }
-                seen.insert(next);
-                stack.push(next);
-            }
-        }
-        seen
-    }
-
     /// Label every solid cell with an 8-connected component id. The ball uses
     /// this to stay on one connected mass instead of hopping between them.
     pub fn solid_components(&self) -> HashMap<IVec2, usize> {
@@ -563,17 +541,5 @@ mod tests {
         // Player's own solid is not.
         paint(&mut grid, IVec2::new(10, 10), Cell::Empty);
         assert_eq!(grid.get(IVec2::new(10, 10)), Some(Cell::Empty));
-    }
-
-    /// Reachability is orthogonal-only now, so a diagonal pair is not connected.
-    #[test]
-    fn reachable_is_orthogonal() {
-        let mut grid = grid();
-        grid.set(IVec2::new(1, 0), Cell::Surface);
-        grid.set(IVec2::new(0, 1), Cell::Surface);
-
-        let route = grid.reachable(IVec2::new(1, 0));
-        assert!(route.contains(&IVec2::new(1, 0)));
-        assert!(!route.contains(&IVec2::new(0, 1)));
     }
 }
