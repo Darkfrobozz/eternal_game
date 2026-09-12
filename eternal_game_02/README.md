@@ -101,7 +101,8 @@ Progress is written by `load_level` whenever a game level is loaded, including
 Normal (play-only): `Space` starts the ball rolling and pauses/resumes it in
 place; `Tab` takes manual control (from pen mode it enters run mode paused and
 the next press nudges the ball one cell); `E` leaves run mode from either
-state; `PageDown` loads the next game level; `-`/`=` slow down/speed up the
+state; `PageDown` loads the next game level (disabled in the tutorial, which
+exits only with `Esc`); `-`/`=` slow down/speed up the
 ball's base step rate (handy to skip the wait on a slow loop); left-drag draws
 solids, right-drag erases, `C` clears. Run mode is either automatic (`Space`) or
 manual (`Tab`). The charge readout and
@@ -175,6 +176,9 @@ nine-item checklist:
 Drawing is detected as any solid the level did not lock, and looping as
 `run.solved`. The checklist is not a strict sequence: each
 item latches the moment it happens, so the goals can be ticked in any order.
+When it completes, the prompt just says to press `Esc` to return to the main
+menu — the tutorial never advances into the main game and does not show the
+VICTORY banner.
 The prompt is a `Text2d` pinned to the top-left with `ScreenText`, so it
 stays readable while the player is zooming and panning. Loading any other
 level deactivates it; reloading the tutorial restarts the checklist.

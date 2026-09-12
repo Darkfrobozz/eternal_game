@@ -384,6 +384,11 @@ pub fn cycle_level(
     if !keys.just_pressed(KeyCode::PageDown) {
         return;
     }
+    // The tutorial is a dead end: `Esc` back to the menu is the only way out,
+    // so PageDown must not drop the player into the main game.
+    if tutorial.is_active() {
+        return;
+    }
     if let Some(path) = levels.next_game() {
         load_level(
             &path,
@@ -413,6 +418,10 @@ pub fn advance_detonation(
     mut progress: ResMut<Progress>,
 ) {
     if *detonation != Detonation::Complete {
+        return;
+    }
+    // A tutorial clears its level too, but must not auto-advance into the game.
+    if tutorial.is_active() {
         return;
     }
     let Some(path) = levels.next_game_after() else {

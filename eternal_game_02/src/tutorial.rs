@@ -74,6 +74,11 @@ pub struct Tutorial {
 }
 
 impl Tutorial {
+    /// True while a tutorial level is loaded.
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
+
     /// Called whenever a level is loaded. Loading a tutorial level (re)starts
     /// the walkthrough; any other level switches it off.
     pub fn set_level(&mut self, tutorial_level: bool) {
@@ -215,7 +220,7 @@ pub fn draw_tutorial(tutorial: Res<Tutorial>, mut texts: Query<&mut Text2d, With
             text.0.clear();
         } else if tutorial.complete() {
             text.0 =
-                "TUTORIAL COMPLETE\n\nPress E to leave run mode,\nor PageDown for the next level.".into();
+                "TUTORIAL COMPLETE\n\nPress Esc to return to the main menu.".into();
         } else {
             let flags = tutorial.flags();
             let mut body = String::from("TUTORIAL\n\n");

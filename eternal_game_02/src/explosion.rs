@@ -21,6 +21,7 @@ use crate::ball::{Ball, Outcome, Run};
 use crate::grid::{CELL_PX, Cell, Grid};
 use crate::screen::{ScreenAnchor, ScreenText};
 use crate::sfx::{self, Sfx};
+use crate::tutorial::Tutorial;
 
 /// World z of the burst, above the ball (5) and the grid (0).
 const BURST_Z: f32 = 8.0;
@@ -104,9 +105,13 @@ pub fn setup_victory_text(mut commands: Commands) {
 pub fn show_victory(
     run: Res<Run>,
     detonation: Res<Detonation>,
+    tutorial: Res<Tutorial>,
     mut texts: Query<(&mut Text2d, &mut Visibility), With<VictoryText>>,
 ) {
-    let visible = *detonation == Detonation::Complete && run.outcome == Outcome::Victory;
+    // A tutorial ends on its own prompt, not the VICTORY banner.
+    let visible = *detonation == Detonation::Complete
+        && run.outcome == Outcome::Victory
+        && !tutorial.is_active();
     for (mut text, mut visibility) in &mut texts {
         if visible {
             *visibility = Visibility::Visible;
