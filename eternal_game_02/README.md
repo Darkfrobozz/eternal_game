@@ -149,13 +149,11 @@ cells if you want it in the middle.
   Currently a placeholder solution kept for reference.
 - `levels/03.txt` — an editor-drawn spiral that winds out from the centre. It
   loses charge every lap and depletes: a puzzle to solve.
-- `levels/00_tutorial.txt` — a hollow box with one block missing from the top
-  wall. The ball starts inside and falls out through the gap (running out of
-  charge, so it explodes), until the player draws the missing block. **Note:**
-  with the strict win check the closed box is net-zero, so the tutorial's
-  "loop forever" goal currently cannot be met and needs a net-positive shape
-  or a start charge. A file whose name contains `tutorial` (case-insensitive)
-  switches on the guided control tutorial.
+- `levels/00_tutorial.txt` — a small diamond outline with one block missing
+  from its left wall. The ball starts inside and depletes, until the player
+  draws the missing block, which closes the ring and wins. A file whose name
+  contains `tutorial` (case-insensitive) switches on the guided control
+  tutorial.
 
 ## Tutorial
 
