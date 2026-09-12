@@ -27,6 +27,9 @@ pub const CHARGE_PER_CELL: f32 = 1.0;
 pub const SPEEDUP_PER_LAP: f32 = 1.35;
 /// Cap on [`Run::speed`], so an eternal loop stays playable.
 pub const MAX_SPEED: f32 = 25.0;
+/// Fastest the player can crank the base step rate with `=` — a multiplier on
+/// [`STEPS_PER_SECOND`], so they can skip the wait on a slow loop.
+pub const MAX_SPEED_MULT: f32 = 20.0;
 /// How far the shell turns per cell, as a fraction of a full turn. The shell's
 /// angular speed is this times the step rate, so it automatically speeds up as
 /// the ball accelerates; this base is kept low so the default speed is calm.
@@ -66,6 +69,9 @@ pub struct Tuning {
     pub start_charge: f32,
     /// When true the ball only steps on `N` instead of on a timer.
     pub manual: bool,
+    /// Base step-rate multiplier. Persists across runs, so `-` / `=` let the
+    /// player speed a slow loop up (or bring it back to normal) without waiting.
+    pub speed: f32,
 }
 
 impl Default for Tuning {
@@ -73,6 +79,7 @@ impl Default for Tuning {
         Self {
             start_charge: 0.0,
             manual: false,
+            speed: 1.0,
         }
     }
 }
@@ -231,7 +238,7 @@ pub fn update_charge_text(
         .map_or(tuning.start_charge, |b| b.charge);
     for mut text in &mut texts {
         let mode = if tuning.manual { "MANUAL [N]" } else { "auto [M]" };
-        text.0 = format!("Charge: {charge:.1}   {mode}");
+        text.0 = format!("Charge: {charge:.1}   {mode}   speed x{}", tuning.speed);
     }
 }
 
@@ -252,6 +259,18 @@ pub fn tune_start_charge(
     }
     if keys.just_pressed(KeyCode::KeyM) {
         tuning.manual = !tuning.manual;
+    }
+}
+
+/// `-` / `=` slow down / speed up the ball's base step rate (a multiplier on
+/// [`STEPS_PER_SECOND`], `1.0..=MAX_SPEED_MULT`). Works any time in play, so the
+/// player can skip the wait on a slow loop without touching the debug HUD.
+pub fn tune_speed(keys: Res<ButtonInput<KeyCode>>, mut tuning: ResMut<Tuning>) {
+    if keys.just_pressed(KeyCode::Minus) {
+        tuning.speed = (tuning.speed - 1.0).max(1.0);
+    }
+    if keys.just_pressed(KeyCode::Equal) {
+        tuning.speed = (tuning.speed + 1.0).min(MAX_SPEED_MULT);
     }
 }
 
@@ -368,6 +387,12 @@ pub fn spawn_ball(
     ball
 }
 
+/// Seconds between steps for the current run and tuning. Each completed lap
+/// raises [`Run::speed`]; [`Tuning::speed`] is the player's base multiplier.
+fn step_interval(run: &Run, tuning: &Tuning) -> f32 {
+    1.0 / (STEPS_PER_SECOND * run.speed.max(0.01) * tuning.speed.max(0.01))
+}
+
 /// Advance every ball along its track.
 pub fn step_ball(
     time: Res<Time>,
@@ -381,8 +406,9 @@ pub fn step_ball(
         return;
     }
     // Each completed lap raises `speed`, so a solved loop gets faster and
-    // faster. The cap keeps it finite.
-    let interval = 1.0 / (STEPS_PER_SECOND * run.speed.max(0.01));
+    // faster. The cap keeps it finite. `tuning.speed` is the player's base
+    // multiplier so they can skip the wait.
+    let interval = step_interval(&run, &tuning);
     let dt = time.delta_secs();
     for mut ball in &mut balls {
         ball.timer += dt;
@@ -611,7 +637,7 @@ pub fn update_ball_transform(
     mut shells: Query<&mut Transform, (With<BallShell>, Without<Ball>, Without<BallCore>)>,
     mut cores: Query<&mut Transform, (With<BallCore>, Without<Ball>, Without<BallShell>)>,
 ) {
-    let interval = 1.0 / (STEPS_PER_SECOND * run.speed.max(0.01));
+    let interval = step_interval(&run, &tuning);
 
     for (ball, mut transform, children) in &mut balls {
         // Paused, manual or finished runs sit at the logical cell. Otherwise

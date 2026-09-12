@@ -20,7 +20,7 @@ use bevy::prelude::*;
 
 use ball::{
     Run, Tuning, draw_itinerary, manual_step, setup_arrow_texture, setup_ball_texture, step_ball,
-    tune_start_charge, update_ball_color, update_ball_transform, update_charge_text,
+    tune_start_charge, tune_speed, update_ball_color, update_ball_transform, update_charge_text,
 };
 use grid::{CELL_PX, GRID_H, GRID_W};
 use config::{Levels, Progress, advance_detonation, cycle_level, setup_levels, update_level_text};
@@ -118,6 +118,7 @@ fn main() {
                 config::debug_io,
                 cycle_level.run_if(in_play),
                 tune_start_charge,
+                tune_speed.run_if(in_play),
                 place_start.run_if(in_play),
                 handle_mode.run_if(in_play),
                 paint.run_if(in_paint_mode),

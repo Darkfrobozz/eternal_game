@@ -181,6 +181,7 @@ pub fn parse(text: &str, image: Handle<Image>) -> Option<(Grid, Option<IVec2>, T
         Tuning {
             start_charge,
             manual: false,
+            speed: 1.0,
         },
     ))
 }
@@ -311,7 +312,10 @@ pub fn load_level(
     };
     *grid = loaded;
     place.start = loaded_place;
+    // Keep the player's speed preference across level changes.
+    let speed = tuning.speed;
     *tuning = loaded_tuning;
+    tuning.speed = speed;
     *run = Run::default();
     *mode = Mode::Paint;
     let tutorial_level = is_tutorial(path);
@@ -455,7 +459,10 @@ pub fn debug_io(
             Some((loaded, loaded_place, loaded_tuning)) => {
                 *grid = loaded;
                 place.start = loaded_place;
+                // Keep the player's speed preference across loads.
+                let speed = tuning.speed;
                 *tuning = loaded_tuning;
+                tuning.speed = speed;
                 *run = Run::default();
                 *mode = Mode::Paint;
                 info!("Loaded config from {CONFIG_PATH}");
@@ -523,6 +530,7 @@ mod tests {
         let tuning = Tuning {
             start_charge: 4.0,
             manual: false,
+            speed: 1.0,
         };
         let text = serialize(&grid, Some(IVec2::new(19, 20)), &tuning);
         // Cropped to the shape, not the whole 160x120 board.

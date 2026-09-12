@@ -101,8 +101,9 @@ Progress is written by `load_level` whenever a game level is loaded, including
 Normal (play-only): `Space` starts the ball rolling and pauses/resumes it in
 place; `Tab` takes manual control (from pen mode it enters run mode paused and
 the next press nudges the ball one cell); `E` leaves run mode from either
-state; `PageDown` loads the next game level; left-drag draws solids,
-right-drag erases, `C` clears. Run mode is either automatic (`Space`) or
+state; `PageDown` loads the next game level; `-`/`=` slow down/speed up the
+ball's base step rate (handy to skip the wait on a slow loop); left-drag draws
+solids, right-drag erases, `C` clears. Run mode is either automatic (`Space`) or
 manual (`Tab`). The charge readout and
 controller hint are hidden; the player infers charge from the arrows (green
 accumulates, orange consumes) and the ball's battery colour, which sweeps from
@@ -159,7 +160,7 @@ cells if you want it in the middle.
 
 The tutorial is attached to any level file whose name contains `tutorial`.
 Loading such a level activates [`Tutorial`](src/tutorial.rs), which shows a
-eight-item checklist:
+nine-item checklist:
 
 1. draw on the grid (left-click and drag),
 2. `Tab` to nudge the ball one cell,
@@ -167,8 +168,9 @@ eight-item checklist:
 4. `Space` again to pause,
 5. the scroll wheel to zoom,
 6. `W`/`A`/`S`/`D` to pan,
-7. make the ball loop forever (sets `Run.solved`),
-8. `E` to leave run mode.
+7. `-`/`=` to change the ball speed,
+8. make the ball loop forever (sets `Run.solved`),
+9. `E` to leave run mode.
 
 Drawing is detected as any solid the level did not lock, and looping as
 `run.solved`. The checklist is not a strict sequence: each

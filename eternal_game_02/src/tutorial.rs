@@ -10,8 +10,9 @@
 //! 4. `Space` again to pause it,
 //! 5. the scroll wheel to zoom,
 //! 6. `W`/`A`/`S`/`D` to pan,
-//! 7. closing an eternal loop,
-//! 8. `E` to leave run mode.
+//! 7. `-`/`=` to change the ball speed,
+//! 8. closing an eternal loop,
+//! 9. `E` to leave run mode.
 //!
 //! The objectives are a checklist, not a strict sequence: each is latched the
 //! moment it happens, so the player is free to do them in any order.
@@ -30,13 +31,14 @@ use crate::paint::Mode;
 use crate::screen::{ScreenAnchor, ScreenText};
 
 /// The tutorial's objectives, in display order.
-const OBJECTIVES: [&str; 8] = [
+const OBJECTIVES: [&str; 9] = [
     "Draw on the grid (left-click and drag)",
     "Press TAB to nudge the ball one step",
     "Press SPACE to start rolling the ball",
     "Press SPACE again to pause the ball",
     "Scroll the mouse wheel to zoom in and out",
     "Hold W, A, S, D to pan the view",
+    "Press - / = to change the ball speed",
     "Make the ball loop forever",
     "Press E to leave run mode",
 ];
@@ -51,6 +53,7 @@ struct Observed {
     exited: bool,
     zoomed: bool,
     panned: bool,
+    speed_changed: bool,
     looped: bool,
 }
 
@@ -66,6 +69,7 @@ pub struct Tutorial {
     exited: bool,
     zoomed: bool,
     panned: bool,
+    speed_changed: bool,
     looped: bool,
 }
 
@@ -97,6 +101,7 @@ impl Tutorial {
             self.paused,
             self.zoomed,
             self.panned,
+            self.speed_changed,
             self.looped,
             self.exited,
         ]
@@ -112,6 +117,7 @@ impl Tutorial {
         self.exited |= observed.exited;
         self.zoomed |= observed.zoomed;
         self.panned |= observed.panned;
+        self.speed_changed |= observed.speed_changed;
         self.looped |= observed.looped;
     }
 }
@@ -197,6 +203,7 @@ pub fn track_tutorial(
         exited: keys.just_pressed(KeyCode::KeyE) && was_running,
         zoomed: scrolled,
         panned,
+        speed_changed: keys.any_just_pressed([KeyCode::Minus, KeyCode::Equal]),
         looped: run.solved,
     });
 }
@@ -249,6 +256,7 @@ mod tests {
             exited: true,
             zoomed: true,
             panned: true,
+            speed_changed: true,
             looped: true,
         }
     }
@@ -267,7 +275,7 @@ mod tests {
         });
         assert_eq!(
             tutorial.flags(),
-            [false, false, false, false, true, false, false, false]
+            [false, false, false, false, true, false, false, false, false]
         );
         assert!(!tutorial.complete());
 
@@ -278,14 +286,14 @@ mod tests {
         });
         assert_eq!(
             tutorial.flags(),
-            [false, false, false, false, true, false, true, false]
+            [false, false, false, false, true, false, false, true, false]
         );
     }
 
     #[test]
     fn each_action_latches_its_own_objective() {
         // (observed action, index in OBJECTIVES it should tick)
-        let cases: [(Observed, usize); 8] = [
+        let cases: [(Observed, usize); 9] = [
             (
                 Observed {
                     drawn: true,
@@ -330,17 +338,24 @@ mod tests {
             ),
             (
                 Observed {
-                    looped: true,
+                    speed_changed: true,
                     ..default()
                 },
                 6,
             ),
             (
                 Observed {
-                    exited: true,
+                    looped: true,
                     ..default()
                 },
                 7,
+            ),
+            (
+                Observed {
+                    exited: true,
+                    ..default()
+                },
+                8,
             ),
         ];
 
