@@ -152,7 +152,7 @@ pub fn place_start(
     if debug.0 && *mode == Mode::Paint && mouse.just_pressed(MouseButton::Middle) {
         let (camera, camera_transform) = *camera;
         if let Some(cell) = cursor_cell(camera, camera_transform, &window, &grid)
-            && grid.is_track(cell)
+            && grid.is_open(cell)
         {
             placement.start = Some(cell);
         }
@@ -163,7 +163,7 @@ pub fn place_start(
     } else {
         None
     }
-    .filter(|cell| grid.is_track(*cell));
+    .filter(|cell| grid.is_open(*cell));
 
     if let Ok((mut transform, mut visibility)) = marker.single_mut() {
         match visible {
@@ -215,7 +215,7 @@ pub fn handle_mode(
             run.just_entered = tab;
             let chosen = placement
                 .start
-                .filter(|cell| grid.is_track(*cell))
+                .filter(|cell| grid.is_open(*cell))
                 .or_else(|| grid.find_start());
             match chosen {
                 Some(start) => {
@@ -277,7 +277,6 @@ pub fn leave_run_on_death(
 pub fn sync_image(
     mut grid: ResMut<Grid>,
     tile: Res<SolidTile>,
-    debug: Res<Debug>,
     mut images: ResMut<Assets<Image>>,
 ) {
     if !grid.dirty {
@@ -312,28 +311,21 @@ pub fn sync_image(
         let top = ((grid.h - 1 - y) as usize) * tex;
         for x in 0..grid.w {
             let cell = grid.cells[(y * grid.w + x) as usize];
-            // Surface is debug-only: outside debug it reads as empty, so the
-            // player only sees the solids they drew.
-            let shown = if !debug.0 && cell == Cell::Surface {
-                Cell::Empty
-            } else {
-                cell
-            };
             let col = x as usize * tex;
 
             // A `None` means "copy the metal tile"; otherwise fill the whole
-            // cell with a flat colour (surface, empty, or burning ash).
+            // cell with a flat colour (empty, or burning ash).
             let flat = if dissolve > 0.0 {
                 let dx = (x - origin.x) as f32;
                 let dy = (y - origin.y) as f32;
                 let distance = (dx * dx + dy * dy).sqrt();
                 let normalised = (distance / radius).clamp(0.0, 1.0);
                 let local = ((dissolve - normalised * 0.6) / 0.4).clamp(0.0, 1.0);
-                Some(Grid::dissolve_color(shown, local))
-            } else if shown == Cell::Solid && tile_px.is_some() {
+                Some(Grid::dissolve_color(cell, local))
+            } else if cell == Cell::Solid && tile_px.is_some() {
                 None
             } else {
-                Some(Grid::color(shown))
+                Some(Grid::color(cell))
             };
 
             if let Some(color) = flat {
@@ -416,11 +408,9 @@ pub fn report_outcome(run: Res<Run>, mut reported: Local<bool>, mut solved: Loca
 }
 
 /// `H` toggles debug / map-editor mode.
-pub fn toggle_debug(keys: Res<ButtonInput<KeyCode>>, mut debug: ResMut<Debug>, mut grid: ResMut<Grid>) {
+pub fn toggle_debug(keys: Res<ButtonInput<KeyCode>>, mut debug: ResMut<Debug>) {
     if keys.just_pressed(KeyCode::KeyH) {
         debug.0 = !debug.0;
-        // Surface visibility follows debug mode, so re-bake the grid.
-        grid.dirty = true;
     }
 }
 
@@ -439,11 +429,6 @@ pub fn apply_hud(
     }
 }
 
-/// Regenerate the derived surface from the solids set when it has changed.
-pub fn apply_solids(mut grid: ResMut<Grid>) {
-    grid.regenerate_surfaces();
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,7 +440,7 @@ mod tests {
         fn leave(outcome: Outcome) -> (Mode, bool, Option<Cell>) {
             let mut app = App::new();
             let mut grid = Grid::new(Handle::default());
-            grid.set(IVec2::new(5, 5), Cell::Surface);
+            grid.set(IVec2::new(5, 5), Cell::Empty);
             app.insert_resource(grid);
             app.insert_resource(Mode::Run);
             app.insert_resource(Run {
@@ -478,7 +463,7 @@ mod tests {
             assert!(!ball_alive, "{outcome:?} should despawn the ball");
             assert_eq!(
                 cell,
-                Some(Cell::Surface),
+                Some(Cell::Empty),
                 "{outcome:?} should not alter the grid"
             );
         }

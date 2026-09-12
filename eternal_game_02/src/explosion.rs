@@ -203,7 +203,8 @@ pub fn update_detonation(
 fn level_radius(grid: &Grid) -> f32 {
     match grid.content_bounds() {
         Some((min, max)) => {
-            let span = (max - min + IVec2::ONE).as_vec2();
+            // The solids bbox plus the one-cell open ring the ball walks.
+            let span = (max - min + IVec2::splat(3)).as_vec2();
             (span.length() * 0.5).max(1.0)
         }
         None => 1.0,

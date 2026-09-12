@@ -438,7 +438,7 @@ pub(crate) fn step_once(grid: &Grid, run: &mut Run, ball: &mut Ball) {
         let target = anchor + cw45(next - anchor);
         match grid.get(target) {
             Some(Cell::Solid) => anchor = target, // pivot around the corner
-            Some(Cell::Surface) => {
+            Some(Cell::Empty) => {
                 next = target;
                 stepped = true;
                 break;
@@ -862,7 +862,6 @@ mod tests {
                 }
             }
         }
-        grid.regenerate_surfaces();
         grid.find_start().unwrap()
     }
 
@@ -871,7 +870,6 @@ mod tests {
         for x in from..=to {
             grid.paint(IVec2::new(x, y), Cell::Solid);
         }
-        grid.regenerate_surfaces();
         IVec2::new(from, y + 1)
     }
 
@@ -921,7 +919,6 @@ mod tests {
             grid.paint(IVec2::new(0, y), Cell::Solid);
             grid.paint(IVec2::new(2, y), Cell::Solid);
         }
-        grid.regenerate_surfaces();
 
         let mut run = Run::default();
         start_run(&mut run, &grid);
@@ -979,7 +976,6 @@ mod tests {
         // with horizontals.
         let mut grid = grid();
         grid.paint(IVec2::new(5, 5), Cell::Solid);
-        grid.regenerate_surfaces();
 
         let mut run = Run::default();
         start_run(&mut run, &grid);
@@ -1038,7 +1034,6 @@ mod tests {
     fn empty_battery_can_roll_downhill() {
         let mut grid = grid();
         grid.paint(IVec2::new(5, 5), Cell::Solid);
-        grid.regenerate_surfaces();
 
         let mut run = Run::default();
         start_run(&mut run, &grid);
@@ -1062,7 +1057,6 @@ mod tests {
                 grid.paint(IVec2::new(x, y), Cell::Solid);
             }
         }
-        grid.regenerate_surfaces();
         let start = grid.find_start().unwrap();
 
         let mut run = Run::default();
@@ -1087,7 +1081,6 @@ mod tests {
                 }
             }
         }
-        grid.regenerate_surfaces();
         let start = IVec2::new(11, 17);
 
         let mut run = Run::default();
@@ -1119,7 +1112,6 @@ mod tests {
                 }
             }
         }
-        grid.regenerate_surfaces();
         let start = IVec2::new(11, 17);
 
         let mut run = Run::default();
@@ -1147,7 +1139,6 @@ mod tests {
         ] {
             grid.paint(solid, Cell::Solid);
         }
-        grid.regenerate_surfaces();
         let start = IVec2::new(77, 78);
 
         let mut run = Run::default();
@@ -1194,7 +1185,6 @@ mod tests {
                 grid.paint(IVec2::new(x, y), Cell::Solid);
             }
         }
-        grid.regenerate_surfaces();
         let start = grid.find_start().unwrap();
 
         let mut run = Run::default();
@@ -1228,7 +1218,6 @@ mod tests {
                 grid.paint(IVec2::new(x, y), Cell::Solid);
             }
         }
-        grid.regenerate_surfaces();
         let start = grid.find_start().unwrap();
 
         let mut run = Run::default();
@@ -1259,7 +1248,6 @@ mod tests {
         for offset in NEIGHBORS8 {
             grid.set(IVec2::new(10, 10) + offset, Cell::Solid);
         }
-        grid.set(IVec2::new(10, 10), Cell::Surface);
 
         let mut run = Run::default();
         start_run(&mut run, &grid);

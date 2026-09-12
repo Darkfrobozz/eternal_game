@@ -180,10 +180,7 @@ pub fn track_tutorial(
 
     // The pen can only add solids that the level did not lock, so any such
     // cell means the player has drawn something of their own.
-    let drawn = grid
-        .solids
-        .iter()
-        .any(|cell| !grid.locked.contains(cell));
+    let drawn = grid.has_unlocked_solid();
     let panned = keys.any_just_pressed([
         KeyCode::KeyW,
         KeyCode::KeyA,

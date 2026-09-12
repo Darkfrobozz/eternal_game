@@ -31,7 +31,7 @@ use explosion::{
 use menu::{Menu, Screen, draw_menu, menu_input, setup_menu};
 use paint::{
     Brush, Debug, Mode, Placement, apply_hud, handle_mode, leave_run_on_death, paint, place_start,
-    report_outcome, apply_solids, setup_grid, setup_solid_tile, sync_image, toggle_debug,
+    report_outcome, setup_grid, setup_solid_tile, sync_image, toggle_debug,
     watch_solid_tile,
 };
 use rain::{
@@ -121,7 +121,6 @@ fn main() {
                 place_start.run_if(in_play),
                 handle_mode.run_if(in_play),
                 paint.run_if(in_paint_mode),
-                apply_solids,
                 step_ball.run_if(in_run_mode),
                 manual_step.run_if(in_run_mode),
                 watch_solid_tile,

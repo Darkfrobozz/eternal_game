@@ -4,11 +4,13 @@
 //! this array: we keep an [`Image`](bevy::image::Image) the same size as the
 //! grid and blit it onto a stretched sprite.
 //!
-//! Cell values follow the design doc:
-//! `0 Empty`, `1 Solid` (pen), `2 Surface` (auto-generated track).
+//! Cells are only `0 Empty` or `1 Solid` (the pen). There is no stored surface:
+//! the ball walks clockwise around a solid anchor and only ever steps onto a
+//! cell 8-adjacent to a solid, so "track" is simply "not solid". See
+//! [`Grid::is_open`].
 
 use bevy::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 /// Grid width in cells.
 pub const GRID_W: i32 = 160;
@@ -22,7 +24,7 @@ pub const CELL_TEX: i32 = 16;
 
 /// The eight neighbours, in counter-clockwise order starting east.
 ///
-/// Used both for "grow surface around solids" and for the ball's movement.
+/// Used for "is this cell next to a solid" and for the ball's anchor ring.
 pub const NEIGHBORS8: [IVec2; 8] = [
     IVec2::new(1, 0),
     IVec2::new(1, 1),
@@ -51,8 +53,6 @@ pub enum Cell {
     Empty,
     /// `1` — the white mass the pen draws.
     Solid,
-    /// `2` — track the ball can travel on, grown around solids.
-    Surface,
 }
 
 /// The game world as a flat array of cells, plus the texture that displays it.
@@ -67,11 +67,6 @@ pub struct Grid {
     pub image: Handle<Image>,
     /// Cells that belong to the level; the eraser may not remove these solids.
     pub locked: HashSet<IVec2>,
-    /// The authoritative set of solid cells. The surface is regenerated from
-    /// this whenever `solids_dirty` is set.
-    pub solids: HashSet<IVec2>,
-    /// Set when `solids` changes, so the surface can be regenerated.
-    pub solids_dirty: bool,
     /// Victory dissolve progress: `0.0` intact, `1.0` fully ashed and gone.
     pub dissolve: f32,
     /// The cell the dissolve wave spreads out from (the ball).
@@ -89,8 +84,6 @@ impl Grid {
             dirty: true,
             image,
             locked: HashSet::new(),
-            solids: HashSet::new(),
-            solids_dirty: false,
             dissolve: 0.0,
             dissolve_origin: IVec2::ZERO,
             dissolve_radius: 1.0,
@@ -98,37 +91,42 @@ impl Grid {
     }
 
     /// Lock the solid cells (the level's walls) so the eraser cannot remove
-    /// them. The derived surface is *not* locked.
+    /// them.
     pub fn lock_solids(&mut self) {
         self.locked.clear();
-        self.solids.clear();
         for y in 0..self.h {
             for x in 0..self.w {
                 let cell = IVec2::new(x, y);
                 if self.get(cell) == Some(Cell::Solid) {
                     self.locked.insert(cell);
-                    self.solids.insert(cell);
                 }
             }
         }
     }
 
-    /// Shift every solid so the solid bounding box is centred on the board,
-    /// and return the shift applied (so a placed start can follow it).
+    /// Shift every solid so its bounding box is centred on the board, and return
+    /// the shift applied (so a placed start can follow it).
     ///
     /// This lets a level be drawn anywhere in the editor and still appear
     /// centred when it is loaded. The board's centre sits between cells
     /// `(w-1)/2` and `w/2`, so doubled coordinates are used to avoid a
     /// rounding bias.
     pub fn recenter_solids(&mut self) -> IVec2 {
-        if self.solids.is_empty() {
-            return IVec2::ZERO;
-        }
         let mut min = IVec2::splat(i32::MAX);
         let mut max = IVec2::splat(i32::MIN);
-        for solid in &self.solids {
-            min = min.min(*solid);
-            max = max.max(*solid);
+        let mut any = false;
+        for y in 0..self.h {
+            for x in 0..self.w {
+                let cell = IVec2::new(x, y);
+                if self.get(cell) == Some(Cell::Solid) {
+                    min = min.min(cell);
+                    max = max.max(cell);
+                    any = true;
+                }
+            }
+        }
+        if !any {
+            return IVec2::ZERO;
         }
         let bbox_centre2 = min + max;
         let board_centre2 = IVec2::new(self.w - 1, self.h - 1);
@@ -137,31 +135,20 @@ impl Grid {
             ((board_centre2.y - bbox_centre2.y) as f32 / 2.0).round() as i32,
         );
         if shift != IVec2::ZERO {
-            self.solids = self.solids.iter().map(|solid| *solid + shift).collect();
-            self.solids_dirty = true;
-            self.regenerate_surfaces();
-        }
-        shift
-    }
-
-    /// Rebuild every derived surface cell from `solids`. Cheap enough to run
-    /// whenever the matrix is dirty.
-    pub fn regenerate_surfaces(&mut self) {
-        if !self.solids_dirty {
-            return;
-        }
-        self.solids_dirty = false;
-        self.cells.iter_mut().for_each(|c| *c = Cell::Empty);
-        let solids: Vec<IVec2> = self.solids.iter().copied().collect();
-        for solid in solids {
-            self.set(solid, Cell::Solid);
-            for n in self.neighbors(solid).collect::<Vec<_>>() {
-                if self.get(n) == Some(Cell::Empty) {
-                    self.set(n, Cell::Surface);
+            let old = std::mem::take(&mut self.cells);
+            let mut cells = vec![Cell::Empty; old.len()];
+            for (i, cell) in old.iter().enumerate() {
+                if *cell == Cell::Solid {
+                    let src = IVec2::new(i as i32 % self.w, i as i32 / self.w);
+                    if let Some(dst) = self.index(src + shift) {
+                        cells[dst] = Cell::Solid;
+                    }
                 }
             }
+            self.cells = cells;
+            self.dirty = true;
         }
-        self.dirty = true;
+        shift
     }
 
     fn index(&self, cell: IVec2) -> Option<usize> {
@@ -173,7 +160,7 @@ impl Grid {
         self.index(cell).map(|i| self.cells[i])
     }
 
-    /// Raw write. Prefer [`Grid::paint`] when drawing, so surface stays in sync.
+    /// Raw write. Prefer [`Grid::paint`] when drawing.
     pub fn set(&mut self, cell: IVec2, value: Cell) {
         if let Some(i) = self.index(cell)
             && self.cells[i] != value
@@ -183,59 +170,29 @@ impl Grid {
         }
     }
 
-    fn neighbors(&self, cell: IVec2) -> impl Iterator<Item = IVec2> + '_ {
-        NEIGHBORS8.iter().map(move |d| cell + *d)
+    /// Is this cell solid?
+    pub fn is_solid(&self, cell: IVec2) -> bool {
+        self.get(cell) == Some(Cell::Solid)
     }
 
-    /// Is this cell part of the track the ball may stand on?
-    pub fn is_track(&self, cell: IVec2) -> bool {
-        self.get(cell) == Some(Cell::Surface)
+    /// Is this cell somewhere the ball may stand — empty and next to a solid?
+    ///
+    /// With the anchor model, every step lands on a cell 8-adjacent to a solid,
+    /// so this is exactly the tracked surface. It needs no stored state.
+    pub fn is_open(&self, cell: IVec2) -> bool {
+        self.get(cell) == Some(Cell::Empty)
+            && NEIGHBORS8
+                .iter()
+                .any(|offset| self.is_solid(cell + *offset))
     }
 
-    /// The pen. `Cell::Solid` lays down a `1` and grows `2` surface on every
-    /// adjacent empty cell; `Cell::Empty` erases and cleans up surface that no
-    /// longer touches any solid.
+    /// The pen. `Cell::Solid` draws a wall; `Cell::Empty` erases it. The eraser
+    /// must not remove level solids, but the pen may still add.
     pub fn paint(&mut self, cell: IVec2, value: Cell) {
-        // The eraser must not remove level solids, but the pen may still add.
         if value == Cell::Empty && self.locked.contains(&cell) {
             return;
         }
-        let changed = match value {
-            Cell::Solid => self.solids.insert(cell),
-            Cell::Empty => self.solids.remove(&cell),
-            _ => false,
-        };
-        if changed {
-            self.solids_dirty = true;
-        }
-    }
-
-    /// Regenerate the whole `2` surface from the `1` solids.
-    ///
-    /// The surface is derived data, so a config only really needs to store the
-    /// solids; this rebuilds everything else.
-    pub fn rebuild_surface(&mut self) {
-        self.solids = (0..self.h)
-            .flat_map(|y| (0..self.w).map(move |x| IVec2::new(x, y)))
-            .filter(|c| self.get(*c) == Some(Cell::Solid))
-            .collect();
-        for c in &mut self.cells {
-            if *c != Cell::Solid {
-                *c = Cell::Empty;
-            }
-        }
-        let solids: Vec<IVec2> = (0..self.h)
-            .flat_map(|y| (0..self.w).map(move |x| IVec2::new(x, y)))
-            .filter(|c| self.get(*c) == Some(Cell::Solid))
-            .collect();
-        for solid in solids {
-            for n in self.neighbors(solid).collect::<Vec<_>>() {
-                if self.get(n) == Some(Cell::Empty) {
-                    self.set(n, Cell::Surface);
-                }
-            }
-        }
-        self.dirty = true;
+        self.set(cell, value);
     }
 
     /// Paint a straight line of cells with `value` (Bresenham), so fast drags
@@ -265,24 +222,28 @@ impl Grid {
         }
     }
 
-    /// Wipe everything except locked solids, then regrow their surface.
+    /// Wipe everything except locked solids.
     pub fn clear(&mut self) {
-        self.solids.retain(|cell| self.locked.contains(cell));
-        self.solids_dirty = true;
-        self.regenerate_surfaces();
+        for y in 0..self.h {
+            for x in 0..self.w {
+                let cell = IVec2::new(x, y);
+                if !self.locked.contains(&cell) {
+                    self.set(cell, Cell::Empty);
+                }
+            }
+        }
     }
 
-    /// Wipe the whole board — solids, surface and the level lock. Used when the
-    /// victory detonation consumes the level.
+    /// Wipe the whole board — solids and the level lock. Used when the victory
+    /// detonation consumes the level.
     pub fn obliterate(&mut self) {
-        self.solids.clear();
         self.locked.clear();
         self.cells.iter_mut().for_each(|c| *c = Cell::Empty);
         self.dissolve = 0.0;
         self.dirty = true;
     }
 
-    /// Bounding box of every non-empty cell, or `None` if the board is blank.
+    /// Bounding box of every solid cell, or `None` if the board is blank.
     /// Doubles as the level's extent for the victory blast.
     pub fn content_bounds(&self) -> Option<(IVec2, IVec2)> {
         let mut min = IVec2::new(self.w, self.h);
@@ -301,9 +262,9 @@ impl Grid {
     }
 
     /// Label every solid cell with an 8-connected component id. The ball uses
-    /// this to stay on one connected mass instead of hopping between them.
-    pub fn solid_components(&self) -> HashMap<IVec2, usize> {
-        let mut labels: HashMap<IVec2, usize> = HashMap::new();
+    /// the labels to pick its first anchor.
+    pub fn solid_components(&self) -> std::collections::HashMap<IVec2, usize> {
+        let mut labels: std::collections::HashMap<IVec2, usize> = std::collections::HashMap::new();
         let mut next_id = 0;
         for y in 0..self.h {
             for x in 0..self.w {
@@ -328,13 +289,13 @@ impl Grid {
         labels
     }
 
-    /// The topmost surface cell (tie-break: leftmost) — the default start.
+    /// The topmost open cell (tie-break: leftmost) — the default start.
     pub fn find_start(&self) -> Option<IVec2> {
         let mut best: Option<IVec2> = None;
         for y in 0..self.h {
             for x in 0..self.w {
-                if self.cells[(y * self.w + x) as usize] == Cell::Surface {
-                    let c = IVec2::new(x, y);
+                let c = IVec2::new(x, y);
+                if self.is_open(c) {
                     best = Some(match best {
                         None => c,
                         Some(b) if c.y > b.y || (c.y == b.y && c.x < b.x) => c,
@@ -344,6 +305,20 @@ impl Grid {
             }
         }
         best
+    }
+
+    /// True if any solid is not part of the locked level — i.e. the player has
+    /// drawn something of their own. Used by the tutorial.
+    pub fn has_unlocked_solid(&self) -> bool {
+        for y in 0..self.h {
+            for x in 0..self.w {
+                let cell = IVec2::new(x, y);
+                if self.get(cell) == Some(Cell::Solid) && !self.locked.contains(&cell) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// World position -> grid cell, if the position is inside the grid.
@@ -376,7 +351,6 @@ impl Grid {
         match cell {
             Cell::Empty => [0, 0, 0, 0],
             Cell::Solid => [104, 112, 130, 255],
-            Cell::Surface => [58, 92, 150, 255],
         }
     }
 
@@ -398,7 +372,7 @@ impl Grid {
         }
     }
 
-    /// Number of cells currently holding `value` (tests / win checks).
+    /// Number of cells currently holding `value` (tests).
     #[cfg(test)]
     pub fn count(&self, value: Cell) -> usize {
         self.cells.iter().filter(|c| **c == value).count()
@@ -423,10 +397,48 @@ mod tests {
         Grid::new(Handle::default())
     }
 
-    /// Paint a cell and rebuild the derived surface, as the app does.
     fn paint(grid: &mut Grid, cell: IVec2, value: Cell) {
         grid.paint(cell, value);
-        grid.regenerate_surfaces();
+    }
+
+    /// A single solid opens its eight neighbours as track.
+    #[test]
+    fn a_solid_opens_its_eight_neighbours() {
+        let mut grid = grid();
+        paint(&mut grid, IVec2::new(5, 5), Cell::Solid);
+        assert!(grid.is_solid(IVec2::new(5, 5)));
+        for offset in NEIGHBORS8 {
+            assert!(
+                grid.is_open(IVec2::new(5, 5) + offset),
+                "neighbour {offset:?} should be open"
+            );
+        }
+        // A cell two away, and the solid itself, are not open.
+        assert!(!grid.is_open(IVec2::new(7, 5)));
+        assert!(!grid.is_open(IVec2::new(5, 5)));
+    }
+
+    /// Erasing the only solid closes its neighbours again.
+    #[test]
+    fn erasing_closes_the_neighbours() {
+        let mut grid = grid();
+        paint(&mut grid, IVec2::new(5, 5), Cell::Solid);
+        paint(&mut grid, IVec2::new(5, 5), Cell::Empty);
+        assert!(!grid.is_open(IVec2::new(6, 5)));
+    }
+
+    /// `find_start` returns an open cell next to the drawn solid.
+    #[test]
+    fn find_start_lands_next_to_a_solid() {
+        let mut grid = grid();
+        paint(&mut grid, IVec2::new(5, 5), Cell::Solid);
+        let start = grid.find_start().unwrap();
+        assert!(grid.is_open(start));
+        assert!(
+            NEIGHBORS8
+                .iter()
+                .any(|d| grid.is_solid(start + *d))
+        );
     }
 
     /// A level drawn off-centre is recentred on the board by the loader.
@@ -438,18 +450,15 @@ mod tests {
                 grid.set(IVec2::new(x, y), Cell::Solid);
             }
         }
-        grid.rebuild_surface();
 
         let shift = grid.recenter_solids();
 
         // A 4x4 block drawn at 10..13 recentres exactly on a 160x120 board.
         assert_eq!(shift, IVec2::new(68, 48));
-        let xs = grid.solids.iter().map(|c| c.x);
-        let ys = grid.solids.iter().map(|c| c.y);
-        assert_eq!((xs.clone().min(), xs.max()), (Some(78), Some(81)));
-        assert_eq!((ys.clone().min(), ys.max()), (Some(58), Some(61)));
-        // Surface was regenerated around the new position.
-        assert!(grid.count(Cell::Surface) > 0);
+        let (min, max) = grid.content_bounds().unwrap();
+        assert_eq!(min, IVec2::new(78, 58));
+        assert_eq!(max, IVec2::new(81, 61));
+        assert_eq!(grid.count(Cell::Solid), 16);
     }
 
     /// The victory dissolve burns a cell from its colour to ash, then away.
@@ -458,7 +467,10 @@ mod tests {
         let base = Grid::color(Cell::Solid);
         assert_eq!(Grid::dissolve_color(Cell::Solid, 0.0), base);
         // The empty background never ashes over.
-        assert_eq!(Grid::dissolve_color(Cell::Empty, 0.5), Grid::color(Cell::Empty));
+        assert_eq!(
+            Grid::dissolve_color(Cell::Empty, 0.5),
+            Grid::color(Cell::Empty)
+        );
 
         let ash = Grid::dissolve_color(Cell::Solid, 0.5);
         assert_ne!(ash, base);
@@ -466,10 +478,13 @@ mod tests {
         assert!(ash[0] < base[0] && ash[1] < base[1] && ash[2] < base[2]);
 
         // Burnt all the way down to the background.
-        assert_eq!(Grid::dissolve_color(Cell::Solid, 1.0), Grid::color(Cell::Empty));
+        assert_eq!(
+            Grid::dissolve_color(Cell::Solid, 1.0),
+            Grid::color(Cell::Empty)
+        );
     }
 
-    /// The detonation wipes the whole board — solids, surface and lock.
+    /// The detonation wipes the whole board, including the lock.
     #[test]
     fn obliterate_clears_everything() {
         let mut grid = grid();
@@ -480,48 +495,31 @@ mod tests {
         grid.obliterate();
 
         assert_eq!(grid.count(Cell::Empty), (GRID_W * GRID_H) as usize);
-        assert!(grid.solids.is_empty());
         assert!(grid.locked.is_empty());
         assert!(grid.dirty);
     }
 
-    /// The content bounds cover the drawn shape plus its grown surface.
+    /// The content bounds are the solid bounding box.
     #[test]
     fn content_bounds_covers_the_drawn_cells() {
         let mut grid = grid();
         paint(&mut grid, IVec2::new(5, 5), Cell::Solid);
         paint(&mut grid, IVec2::new(8, 9), Cell::Solid);
         let (min, max) = grid.content_bounds().expect("non-empty");
-        assert_eq!(min, IVec2::new(4, 4));
-        assert_eq!(max, IVec2::new(9, 10));
+        assert_eq!(min, IVec2::new(5, 5));
+        assert_eq!(max, IVec2::new(8, 9));
     }
 
+    /// Player-drawn solids count as "drawn"; locked level solids do not.
     #[test]
-    fn painting_a_solid_grows_eight_surface_cells() {
+    fn only_unlocked_solids_count_as_drawn() {
         let mut grid = grid();
         paint(&mut grid, IVec2::new(5, 5), Cell::Solid);
-        assert_eq!(grid.get(IVec2::new(5, 5)), Some(Cell::Solid));
-        assert_eq!(grid.count(Cell::Surface), 8);
-    }
+        grid.lock_solids();
+        assert!(!grid.has_unlocked_solid());
 
-    #[test]
-    fn erasing_cleans_up_orphaned_surface() {
-        let mut grid = grid();
-        paint(&mut grid, IVec2::new(5, 5), Cell::Solid);
-        paint(&mut grid, IVec2::new(5, 5), Cell::Empty);
-        assert_eq!(grid.count(Cell::Surface), 0);
-    }
-
-    #[test]
-    fn a_solid_block_gets_an_outline() {
-        let mut grid = grid();
-        for y in 5..8 {
-            for x in 5..8 {
-                paint(&mut grid, IVec2::new(x, y), Cell::Solid);
-            }
-        }
-        // The 5x5 neighbourhood minus the 3x3 solid block.
-        assert_eq!(grid.count(Cell::Surface), 25 - 9);
+        paint(&mut grid, IVec2::new(10, 10), Cell::Solid);
+        assert!(grid.has_unlocked_solid());
     }
 
     /// The eraser can't remove level solids, but the player's own solids are

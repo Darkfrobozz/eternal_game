@@ -22,14 +22,13 @@ That is once the ball is infinitely looping (reaching the same position with mor
 
 ## Current implementation
 
-Cell values in the array: `0` empty, `1` solid (painted by the pen), `2` surface
-(auto-grown around solids).
+Cell values in the array: `0` empty, `1` solid (painted by the pen). There is no
+stored surface.
 
-- **Solids are the source of truth.** `Grid.solids: HashSet<IVec2>` holds every
-  wall. `Grid::paint` only inserts/removes from that set and raises
-  `solids_dirty`; `Grid::regenerate_surfaces` rebuilds every `2` from the solids
-  (`apply_solids` runs it right after painting). There is no incremental surface
-  bookkeeping.
+- **The array is the whole world.** A level is just its solid cells; "track" is
+derived — a cell the ball may stand on is any empty cell 8-adjacent to a solid
+([`Grid::is_open`](src/grid.rs)). `Grid::paint` writes `Solid`/`Empty` straight
+into the array. No `solids` set, no `solids_dirty`, no regeneration pass.
 - **Rendering.** One `Image` (`GRID_W`×`GRID_H`, one pixel per cell) blitted to
   one stretched `Sprite` with nearest sampling. `sync_image` copies `cells`
   into the texture while `dirty`.
@@ -40,7 +39,7 @@ Cell values in the array: `0` empty, `1` solid (painted by the pen), `2` surface
   **pivots** the anchor to that corner and retries, so a wall end is rounded
   inside the same step rather than pausing at a dead end. The move is therefore
   a pure function of `(cell, anchor)`, which keeps the ball hugging one contour.
-  `Stuck` only happens when there is no surface at all around the anchor.
+  `Stuck` only happens when there is no open cell around the anchor.
 - **Charge, per move:**
   - vertical: down `+1`, up `-1`;
   - horizontal: takes the **preceding vertical's** sign if it directly follows a
@@ -63,13 +62,13 @@ Cell values in the array: `0` empty, `1` solid (painted by the pen), `2` surface
   blast finishes the next game level loads automatically; if there is none, a
   **VICTORY** banner appears.
 - **Anything that ends the ball explodes.** `Depleted` (empty battery),
-  `Stuck` (no surface around its anchor) and `Victory` all despawn the ball.
+  `Stuck` (no open cell around its anchor) and `Victory` all despawn the ball.
   The first two leave a single burst; victory leaves a level-wide blast that
   consumes the level and clears the whole grid. After a `Depleted` or `Stuck`
   burst the game drops straight back into **edit mode** (the ball is gone), so
   the player can fix the drawing and roll again; victory instead advances to the
   next level.
-- **Start:** `find_start` (topmost surface cell) or a placed start
+- **Start:** `find_start` (topmost open cell) or a placed start
   (`Placement.start`). The initial anchor is the solid on the right of the
   anchor-derived heading, so the ball always sets off clockwise.
 
@@ -127,8 +126,7 @@ loads the next level (or shows VICTORY when it was the last).
 ## Levels
 
 `levels/*.txt` use the config format. On load, `lock_solids` records the level's
-**solid** cells so the eraser cannot remove them (the derived surface is not
-locked — but since it is derived, erasing a surface cell is a no-op anyway).
+**solid** cells so the eraser cannot remove them. Only solids are editable.
 `PageDown` cycles the **game** levels (skipping the tutorial); the debug HUD
 shows the current file name. A level's `place` and `start_charge` are its
 starting condition.
@@ -195,9 +193,9 @@ file's solids on load). Give it a `tutorial` name to attach the walkthrough.
   board, every step (with charge), and the outcome. It prints a cropped ASCII
   frame after each step. Use it to reproduce any reported bug.
 
-Config is plain text: `#` solid, `+` surface, `.` empty. Only the
-solids and ball placement matter; the surface is rebuilt on load. (`o`, the old
-trail marker, is still accepted and reads as surface.) It is written
+Config is plain text: `#` solid, `.` empty. Only the solids and ball placement
+matter; the track is derived from them on load. (`+` and `o`, the old surface and
+trail markers, are still accepted and read as empty.) It is written
 `v2`, cropped to the bounding box with an `origin` line; the loader also accepts
 old full-grid files (no `origin`).
 
@@ -220,8 +218,8 @@ old full-grid files (no `origin`).
 - `src/screen.rs` — `ScreenText`, a `Text2d` pinned to the window through
   zoom/pan (used by the menu and tutorial).
 - `src/tutorial.rs` — the three-step control tutorial.
-- `src/grid.rs` — `Grid` (cells, `solids`, `locked`, image), painting, surface
-  regeneration, coordinate helpers, solid components.
+- `src/grid.rs` — `Grid` (cells, `locked`, image), painting, open/adjacency
+  helpers, coordinate helpers, solid components.
 - `src/ball.rs` — `Ball`, `Run`, `Tuning`, movement + charge, loop/speed,
   arrows, battery colour, HUD text.
 - `src/explosion.rs` — death bursts (`Depleted`/`Stuck`), the victory
@@ -236,8 +234,8 @@ old full-grid files (no `origin`).
 
 1. **Orthogonal-only movement.** Diagonal moves were removed. A diagonal is
    encoded as a two-step combo; the *horizontal* step carries the extra charge.
-2. **The grid is one array, not entities.** No per-cell ECS; `solids` is the
-   authoritative set and surface is a pure function of it.
+2. **The grid is one array, not entities.** No per-cell ECS; cells are `Empty`
+   or `Solid` and "track" is derived from adjacency, with no stored surface.
 3. **Levels lock solids only.** The eraser checks the target coordinate against
    `Grid.locked`; the pen is always allowed.
 4. **The HUD is hidden by default.** Only `H` reveals charge/controls; the game
@@ -280,7 +278,6 @@ old full-grid files (no `origin`).
   rather than a win is the same open question as the weak zero-charge check.
 - **`Y` saves to `debug_config.txt`, not back to the level file.** Making a
   level is save-then-copy. A "save to current level" key would help.
-- **Erasing surface is a no-op** (it regenerates). Only solids are editable.
 
 ### Parked ideas
 

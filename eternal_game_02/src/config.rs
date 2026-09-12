@@ -54,7 +54,6 @@ fn cell_char(cell: Cell) -> char {
     match cell {
         Cell::Empty => '.',
         Cell::Solid => '#',
-        Cell::Surface => '+',
     }
 }
 
@@ -62,10 +61,9 @@ fn char_cell(c: char) -> Option<Cell> {
     match c {
         '.' => Some(Cell::Empty),
         '#' => Some(Cell::Solid),
-        '+' => Some(Cell::Surface),
-        // Legacy trail marker. The surface is rebuilt on load anyway, so this
-        // keeps older configs parseable without a `Trail` cell.
-        'o' => Some(Cell::Surface),
+        // Legacy surface and trail markers: there is no stored surface, so both
+        // read as empty and the track is derived from the solids on load.
+        '+' | 'o' => Some(Cell::Empty),
         _ => None,
     }
 }
@@ -75,11 +73,18 @@ fn content_bounds(grid: &Grid) -> Option<(IVec2, IVec2)> {
     grid.content_bounds()
 }
 
-/// Render the non-empty region as text. The marker (ball) shows as `@`.
+/// Render the solid region as text. The marker (ball) shows as `@`. The crop
+/// includes a one-cell ring so the open cells the ball walks are visible too.
 pub fn ascii(grid: &Grid, marker: Option<IVec2>) -> String {
     let Some((min, max)) = content_bounds(grid) else {
         return String::new();
     };
+    let mut min = min - IVec2::ONE;
+    let mut max = max + IVec2::ONE;
+    if let Some(m) = marker {
+        min = min.min(m);
+        max = max.max(m);
+    }
     let mut out = String::new();
     for y in (min.y..=max.y).rev() {
         for x in min.x..=max.x {
@@ -169,8 +174,6 @@ pub fn parse(text: &str, image: Handle<Image>) -> Option<(Grid, Option<IVec2>, T
             }
         }
     }
-    // The surface is derived, so a config only really needs the solids.
-    grid.rebuild_surface();
 
     Some((
         grid,
@@ -475,7 +478,7 @@ pub fn replay(path: &str, max_steps: usize) {
 
     println!("{}", ascii(&grid, place));
     let Some(start) = place
-        .filter(|c| grid.is_track(*c))
+        .filter(|c| grid.is_open(*c))
         .or_else(|| grid.find_start())
     else {
         println!("no start cell");
@@ -512,12 +515,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn config_round_trips_and_rebuilds_surface() {
+    fn config_round_trips() {
         let mut grid = Grid::new(Handle::default());
         for y in 10..20 {
             grid.paint(IVec2::new(20, y), Cell::Solid);
         }
-        grid.regenerate_surfaces();
         let tuning = Tuning {
             start_charge: 4.0,
             manual: false,
@@ -530,7 +532,7 @@ mod tests {
         assert_eq!(place, Some(IVec2::new(19, 20)));
         assert_eq!(loaded_tuning.start_charge, 4.0);
         assert_eq!(back.get(IVec2::new(20, 15)), Some(Cell::Solid));
-        assert!(back.is_track(IVec2::new(19, 15)));
+        assert!(back.is_open(IVec2::new(19, 15)));
     }
 
     /// The loader must keep the live texture handle, or `sync_image` writes
