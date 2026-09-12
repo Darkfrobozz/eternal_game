@@ -145,10 +145,10 @@ cells if you want it in the middle.
 
 - `levels/01.txt` — a plain vertical wall. **Currently impossible** (see
   Handoff).
-- `levels/02.txt` — an editor-drawn spiral that winds out from the centre. It
-  loses charge every lap and depletes: a puzzle to solve.
-- `levels/03.txt` — a descending spiral that closes net-positive and wins.
+- `levels/02.txt` — a descending spiral that closes net-positive and wins.
   Currently a placeholder solution kept for reference.
+- `levels/03.txt` — an editor-drawn spiral that winds out from the centre. It
+  loses charge every lap and depletes: a puzzle to solve.
 - `levels/00_tutorial.txt` — a hollow box with one block missing from the top
   wall. The ball starts inside and falls out through the gap (running out of
   charge, so it explodes), until the player draws the missing block. **Note:**

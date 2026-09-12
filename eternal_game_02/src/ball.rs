@@ -1083,11 +1083,11 @@ mod tests {
         assert_eq!(run.outcome, Outcome::Depleted);
     }
 
-    /// A net-positive loop (level 03) is solved, keeps looping, and eventually
+    /// A net-positive loop (level 02) is solved, keeps looping, and eventually
     /// overloads into the victory.
     #[test]
     fn net_positive_loop_solves_and_wins() {
-        let text = std::fs::read_to_string("levels/03.txt").expect("level 03");
+        let text = std::fs::read_to_string("levels/02.txt").expect("level 02");
         let (mut grid, place, _) = crate::config::parse(&text, Handle::default()).expect("parses");
         let start = place.expect("placed start");
 
@@ -1102,7 +1102,7 @@ mod tests {
             }
             step_once(&mut grid, &mut run, &mut ball);
         }
-        assert!(run.solved, "level 03 gains energy every lap");
+        assert!(run.solved, "level 02 gains energy every lap");
         assert_eq!(
             run.outcome,
             Outcome::Running,
