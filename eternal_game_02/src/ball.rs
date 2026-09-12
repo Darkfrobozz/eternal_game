@@ -743,8 +743,9 @@ pub fn draw_itinerary(
 ) {
     let (front, next, spawned) = &mut *state;
 
-    // A fresh run (or a cleared itinerary) drops every arrow.
-    if run.total_moves == 0 {
+    // A fresh run, a cleared itinerary, or a win drops every arrow immediately
+    // — the level is detonating, so the path should not linger over the blast.
+    if run.total_moves == 0 || run.outcome == Outcome::Victory {
         for entity in spawned.drain(..) {
             commands.entity(entity).despawn();
         }
