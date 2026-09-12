@@ -2,7 +2,7 @@
 //!
 //! The ball is a plain ECS entity; only its [`Ball`] component matters to the
 //! simulation. It steps cell-by-cell along the flood-filled route, always
-//! hugging it clockwise and laying a `Trail` (3) behind it.
+//! hugging it clockwise.
 //!
 //! Energy == accumulated distance, measured in cells moved:
 //! * moving **down** accumulates `CHARGE_PER_CELL` per step,
@@ -203,6 +203,17 @@ impl Default for Run {
     }
 }
 
+impl Run {
+    /// Reset the run's visited-cell history so the ball can climb back out of a
+    /// dead end and treat the pocket as a fresh start (what the removed grid
+    /// trail used to do). The itinerary is kept, so the drawn arrows stay put.
+    fn rewind(&mut self, cell: IVec2, charge: f32) {
+        self.visits.clear();
+        self.visits.insert(cell, charge);
+        self.closure = None;
+    }
+}
+
 /// Spawn the charge readout (once, at startup).
 pub fn spawn_charge_text(commands: &mut Commands) {
     commands.spawn((
@@ -372,7 +383,7 @@ pub fn spawn_ball(
 pub fn step_ball(
     time: Res<Time>,
     tuning: Res<Tuning>,
-    mut grid: ResMut<Grid>,
+    grid: Res<Grid>,
     mut run: ResMut<Run>,
     mut balls: Query<&mut Ball>,
 ) {
@@ -391,7 +402,7 @@ pub fn step_ball(
             if run.outcome != Outcome::Running {
                 break;
             }
-            step_once(&mut grid, &mut run, &mut ball);
+            step_once(&grid, &mut run, &mut ball);
         }
     }
 }
@@ -412,7 +423,7 @@ pub fn start_run(run: &mut Run, grid: &Grid, start: IVec2, charge: f32) {
 }
 
 /// One tile of movement. Public so the headless replay can drive it.
-pub(crate) fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
+pub(crate) fn step_once(grid: &Grid, run: &mut Run, ball: &mut Ball) {
     let from = ball.cell;
 
     // Work out which connected solid mass we are following (first move only).
@@ -436,7 +447,7 @@ pub(crate) fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
     // Movement is orthogonal only. Follow the contour with a right-hand rule:
     // take a right turn (clockwise) if one exists, else go straight, else left,
     // never reversing.
-    let mut best: Option<(f32, IVec2, bool)> = None; // key, cell, is_trail
+    let mut best: Option<(f32, IVec2)> = None; // key, cell
     for d in NEIGHBORS4 {
         let next = ball.cell + d;
         if Some(next) == behind || !grid.is_track(next) || !run.route.contains(&next) {
@@ -452,7 +463,6 @@ pub(crate) fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
             continue;
         }
 
-        let is_trail = grid.get(next) == Some(Cell::Trail);
         let angle = turn(heading.as_vec2(), d.as_vec2());
         // Prefer right (clockwise) > straight > left > reverse. The reverse can
         // only happen on the first move (there is no "behind" yet), and
@@ -465,22 +475,21 @@ pub(crate) fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
         };
         // Follow the contour literally: the ball rolls into a pocket rather
         // than floating over it. The dead end is handled by the bounce below.
-        let key = if is_trail { 1000.0 } else { 0.0 }
-            + reverse * 20.0
+        let key = reverse * 20.0
             + counterclockwise * 10.0
             + (angle + std::f32::consts::PI) * 0.001;
-        if best.is_none_or(|(bk, _, _)| key < bk) {
-            best = Some((key, next, is_trail));
+        if best.is_none_or(|(bk, _)| key < bk) {
+            best = Some((key, next));
         }
     }
 
-    let Some((_, next, is_trail)) = best else {
-        // A dead end is not fatal. The ball has rolled into a pocket: regrow
-        // its trail back into surface and treat the pocket as a fresh start,
-        // so it turns around and climbs back out. Only bounce once per cell —
-        // if it cannot move even with no "behind", it really is stuck.
+    let Some((_, next)) = best else {
+        // A dead end is not fatal. The ball has rolled into a pocket: clear its
+        // visited-cell history and treat the pocket as a fresh start, so it
+        // turns around and climbs back out. Only bounce once per cell — if it
+        // cannot move even with no "behind", it really is stuck.
         if ball.moved {
-            grid.reset_trail();
+            run.rewind(ball.cell, ball.charge);
             ball.moved = false;
             info!("Dead end at {:?}: climbing back out", ball.cell);
             return;
@@ -490,16 +499,12 @@ pub(crate) fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
         return;
     };
 
-    // A `Trail` cell is only a loop-closure if the ball actually walked it
-    // (recorded in `visits`). Cells filled in by a turn combo are `Trail` too,
-    // but were never visited, so they are just passed through.
-    //
-    // Closing a loop no longer ends the run. Meeting the charge guarantee
-    // marks the level solved and the ball loops on (accelerating every lap);
-    // missing it leaves the ball doomed, to roll on until it explodes.
-    if is_trail
-        && let Some(best_charge) = run.visits.get(&next).copied()
-    {
+    // A cell the ball has actually walked before (recorded in `visits`) is its
+    // loop closure. Closing a loop no longer ends the run: meeting the charge
+    // guarantee marks the level solved and the ball loops on (accelerating
+    // every lap); missing it leaves the ball doomed, to roll on until it
+    // explodes.
+    if let Some(best_charge) = run.visits.get(&next).copied() {
         // The first cell the ball revisits is where its loop closes; every
         // later return here completes another lap.
         run.closure.get_or_insert(next);
@@ -558,10 +563,7 @@ pub(crate) fn step_once(grid: &mut Grid, run: &mut Run, ball: &mut Ball) {
 
     ball.prev = ball.cell;
 
-    // Lay trail behind us and record the charge we arrived with.
-    if grid.get(ball.cell) == Some(Cell::Surface) {
-        grid.set(ball.cell, Cell::Trail);
-    }
+    // Record the charge we arrived with, for the loop-closure guarantee.
     run.visits.entry(ball.cell).or_insert(ball.charge);
 
     ball.charge += charge;
@@ -694,7 +696,7 @@ pub fn update_ball_transform(
 pub fn manual_step(
     keys: Res<ButtonInput<KeyCode>>,
     tuning: Res<Tuning>,
-    mut grid: ResMut<Grid>,
+    grid: Res<Grid>,
     mut run: ResMut<Run>,
     mut balls: Query<&mut Ball>,
 ) {
@@ -712,7 +714,7 @@ pub fn manual_step(
         return;
     }
     for mut ball in &mut balls {
-        step_once(&mut grid, &mut run, &mut ball);
+        step_once(&grid, &mut run, &mut ball);
     }
 }
 
@@ -725,7 +727,7 @@ pub struct ArrowTexture(pub Handle<Image>);
 pub struct ItineraryArrow;
 
 /// Z of the itinerary arrows: above the grid, below the ball, so the ball is
-/// never hidden behind its own trail.
+/// never hidden behind its own path.
 const ARROW_Z: f32 = 2.0;
 
 /// Generate the arrow texture once at startup.
@@ -946,9 +948,9 @@ mod tests {
         assert!(ball.cell.x <= 1, "hopped to the right line: {:?}", ball.cell);
     }
 
-    /// A dead end no longer stops the ball: it regrows its trail and turns
-    /// around, climbing back out of the pocket. On a finite line that means it
-    /// shuttles until the battery runs out — it never ends as `Stuck`.
+    /// A dead end no longer stops the ball: it clears its visited history and
+    /// turns around, climbing back out of the pocket. On a finite line that
+    /// means it shuttles until the battery runs out — it never ends as `Stuck`.
     #[test]
     fn dead_end_bounces_back_out() {
         let mut grid = grid();
@@ -994,6 +996,11 @@ mod tests {
             step_once(&mut grid, &mut run, &mut ball);
         }
         assert_eq!(run.outcome, Outcome::Depleted);
+        assert!(!run.solved, "a dead-end bounce must not solve anything");
+        assert!(
+            run.closure.is_none(),
+            "clearing the visited history on a bounce prevents a false loop closure"
+        );
     }
 
     /// A horizontal move takes the sign of the vertical move before it: here an

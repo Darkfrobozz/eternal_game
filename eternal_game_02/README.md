@@ -23,7 +23,7 @@ That is once the ball is infinitely looping (reaching the same position with mor
 ## Current implementation
 
 Cell values in the array: `0` empty, `1` solid (painted by the pen), `2` surface
-(auto-grown around solids), `3` trail (where the ball has been).
+(auto-grown around solids).
 
 - **Solids are the source of truth.** `Grid.solids: HashSet<IVec2>` holds every
   wall. `Grid::paint` only inserts/removes from that set and raises
@@ -38,8 +38,8 @@ Cell values in the array: `0` empty, `1` solid (painted by the pen), `2` surface
   (right > straight > left, never reversing in normal travel). `Grid::reachable`
   is a 4-connected flood fill of the route; a step must stay on the same
   component. Dead ends are **not** avoided: the ball rolls into a one-cell
-  pocket, then **bounces** — `step_once` regrows the whole trail back into
-  surface and clears the ball's "behind", so it is re-seeded as a fresh start
+  pocket, then **bounces** — `step_once` clears the run's visited-cell history
+  and the ball's "behind", so it is re-seeded as a fresh start
   and turns around to climb back out. Only a cell with no track neighbour at
   all ends the run as `Stuck`. This keeps the ball hugging the contour (no
   floating over the surface gap beside a pocket) while stopping a start-up
@@ -70,7 +70,7 @@ Cell values in the array: `0` empty, `1` solid (painted by the pen), `2` surface
   despawn the ball. The first two leave a single burst; victory leaves a
   level-wide blast that consumes the level and clears the whole grid. After a
   `Depleted` or `Stuck` burst the game drops straight back into **edit mode**
-  (the ball is gone and its trail is cleared), so the player can fix the
+  (the ball is gone), so the player can fix the
   drawing and roll again; victory instead advances to the next level.
   A dead end is not one of these: it bounces the ball (see above).
 - **Start:** `find_start` (topmost surface cell) or a placed start
@@ -111,9 +111,9 @@ The ball rolls — one full turn per cell — smoothly sliding from cell to cell
 nestling against the surface it hugs.
 When the battery is empty and the ball asks for a move it cannot afford, the
 ball explodes instead of taking the step, and the game returns to edit mode
-automatically, clearing the trail, so you can adjust the drawing and roll again
+automatically, clearing the run, so you can adjust the drawing and roll again
 (no need to press `E`). A dead end is different: the ball rolls into the pocket,
-its trail regrows into surface and it turns around to climb back out, so a
+the run's visited history is cleared and it turns around to climb back out, so a
 start-up slot no longer kills the loop. Once a
 loop is solved the ball keeps looping and speeds up a little every lap, and
 after a handful of laps the overload detonates the level, wipes the grid and
@@ -199,8 +199,9 @@ file's solids on load). Give it a `tutorial` name to attach the walkthrough.
   board, every step (with charge), and the outcome. It prints a cropped ASCII
   frame after each step. Use it to reproduce any reported bug.
 
-Config is plain text: `#` solid, `+` surface, `o` trail, `.` empty. Only the
-solids and ball placement matter; the surface is rebuilt on load. It is written
+Config is plain text: `#` solid, `+` surface, `.` empty. Only the
+solids and ball placement matter; the surface is rebuilt on load. (`o`, the old
+trail marker, is still accepted and reads as surface.) It is written
 `v2`, cropped to the bounding box with an `origin` line; the loader also accepts
 old full-grid files (no `origin`).
 

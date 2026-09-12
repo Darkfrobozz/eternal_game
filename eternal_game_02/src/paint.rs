@@ -187,7 +187,7 @@ pub fn handle_mode(
     mut commands: Commands,
     ball_textures: Res<BallTextures>,
     mut mode: ResMut<Mode>,
-    mut grid: ResMut<Grid>,
+    grid: Res<Grid>,
     mut run: ResMut<Run>,
     placement: Res<Placement>,
     mut tuning: ResMut<Tuning>,
@@ -210,7 +210,6 @@ pub fn handle_mode(
             // `Tab` enters run mode paused for manual stepping; `Space` starts
             // it rolling.
             tuning.manual = tab;
-            grid.reset_trail();
             *run = Run::default();
             // The entering `Tab` only takes manual control; the next one nudges.
             run.just_entered = tab;
@@ -234,7 +233,7 @@ pub fn handle_mode(
         }
         Mode::Run => {
             if leave {
-                leave_run(&mut commands, &mut mode, &mut grid, &balls);
+                leave_run(&mut commands, &mut mode, &balls);
                 return;
             }
             if tab {
@@ -248,18 +247,12 @@ pub fn handle_mode(
     }
 }
 
-/// Despawn the ball and return to pen mode, clearing its trail.
-fn leave_run(
-    commands: &mut Commands,
-    mode: &mut Mode,
-    grid: &mut Grid,
-    balls: &Query<Entity, With<Ball>>,
-) {
+/// Despawn the ball and return to pen mode.
+fn leave_run(commands: &mut Commands, mode: &mut Mode, balls: &Query<Entity, With<Ball>>) {
     *mode = Mode::Paint;
     for entity in balls {
         commands.entity(entity).despawn();
     }
-    grid.reset_trail();
 }
 
 /// Dying drops the player straight back into edit mode, so a failed run does
@@ -271,14 +264,13 @@ fn leave_run(
 pub fn leave_run_on_death(
     mut commands: Commands,
     mut mode: ResMut<Mode>,
-    mut grid: ResMut<Grid>,
     run: Res<Run>,
     balls: Query<Entity, With<Ball>>,
 ) {
     if *mode != Mode::Run || !matches!(run.outcome, Outcome::Depleted | Outcome::Stuck) {
         return;
     }
-    leave_run(&mut commands, &mut mode, &mut grid, &balls);
+    leave_run(&mut commands, &mut mode, &balls);
 }
 
 /// Blit the array into the texture, but only when something changed.
@@ -320,9 +312,9 @@ pub fn sync_image(
         let top = ((grid.h - 1 - y) as usize) * tex;
         for x in 0..grid.w {
             let cell = grid.cells[(y * grid.w + x) as usize];
-            // Surface and trail are debug-only: outside debug they read as
-            // empty, so the player only sees the solids they drew.
-            let shown = if !debug.0 && matches!(cell, Cell::Surface | Cell::Trail) {
+            // Surface is debug-only: outside debug it reads as empty, so the
+            // player only sees the solids they drew.
+            let shown = if !debug.0 && cell == Cell::Surface {
                 Cell::Empty
             } else {
                 cell
@@ -330,7 +322,7 @@ pub fn sync_image(
             let col = x as usize * tex;
 
             // A `None` means "copy the metal tile"; otherwise fill the whole
-            // cell with a flat colour (surface, trail, empty, or burning ash).
+            // cell with a flat colour (surface, empty, or burning ash).
             let flat = if dissolve > 0.0 {
                 let dx = (x - origin.x) as f32;
                 let dy = (y - origin.y) as f32;
@@ -427,7 +419,7 @@ pub fn report_outcome(run: Res<Run>, mut reported: Local<bool>, mut solved: Loca
 pub fn toggle_debug(keys: Res<ButtonInput<KeyCode>>, mut debug: ResMut<Debug>, mut grid: ResMut<Grid>) {
     if keys.just_pressed(KeyCode::KeyH) {
         debug.0 = !debug.0;
-        // Surface/trail visibility follows debug mode, so re-bake the grid.
+        // Surface visibility follows debug mode, so re-bake the grid.
         grid.dirty = true;
     }
 }
@@ -456,14 +448,14 @@ pub fn apply_solids(mut grid: ResMut<Grid>) {
 mod tests {
     use super::*;
 
-    /// A death (depleted or stuck) drops back into edit mode and clears the
-    /// ball and its trail; victory and a still-running ball leave run mode be.
+    /// A death (depleted or stuck) drops back into edit mode and removes the
+    /// ball; victory and a still-running ball leave run mode be.
     #[test]
     fn death_returns_to_edit_mode() {
         fn leave(outcome: Outcome) -> (Mode, bool, Option<Cell>) {
             let mut app = App::new();
             let mut grid = Grid::new(Handle::default());
-            grid.set(IVec2::new(5, 5), Cell::Trail);
+            grid.set(IVec2::new(5, 5), Cell::Surface);
             app.insert_resource(grid);
             app.insert_resource(Mode::Run);
             app.insert_resource(Run {
@@ -487,7 +479,7 @@ mod tests {
             assert_eq!(
                 cell,
                 Some(Cell::Surface),
-                "{outcome:?} should clear the trail"
+                "{outcome:?} should not alter the grid"
             );
         }
 

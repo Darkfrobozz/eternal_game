@@ -5,7 +5,7 @@
 //! grid and blit it onto a stretched sprite.
 //!
 //! Cell values follow the design doc:
-//! `0 Empty`, `1 Solid` (pen), `2 Surface` (auto-generated track), `3 Trail`.
+//! `0 Empty`, `1 Solid` (pen), `2 Surface` (auto-generated track).
 
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -53,8 +53,6 @@ pub enum Cell {
     Solid,
     /// `2` — track the ball can travel on, grown around solids.
     Surface,
-    /// `3` — a surface cell the ball has already covered.
-    Trail,
 }
 
 /// The game world as a flat array of cells, plus the texture that displays it.
@@ -191,7 +189,7 @@ impl Grid {
 
     /// Is this cell part of the track the ball may stand on?
     pub fn is_track(&self, cell: IVec2) -> bool {
-        matches!(self.get(cell), Some(Cell::Surface) | Some(Cell::Trail))
+        self.get(cell) == Some(Cell::Surface)
     }
 
     /// The pen. `Cell::Solid` lays down a `1` and grows `2` surface on every
@@ -212,7 +210,7 @@ impl Grid {
         }
     }
 
-    /// Regenerate the whole `2` surface from the `1` solids, discarding trail.
+    /// Regenerate the whole `2` surface from the `1` solids.
     ///
     /// The surface is derived data, so a config only really needs to store the
     /// solids; this rebuilds everything else.
@@ -274,18 +272,8 @@ impl Grid {
         self.regenerate_surfaces();
     }
 
-    /// Turn every visited cell back into fresh surface.
-    pub fn reset_trail(&mut self) {
-        for c in &mut self.cells {
-            if *c == Cell::Trail {
-                *c = Cell::Surface;
-            }
-        }
-        self.dirty = true;
-    }
-
-    /// Wipe the whole board — solids, surface, trail and the level lock. Used
-    /// when the victory detonation consumes the level.
+    /// Wipe the whole board — solids, surface and the level lock. Used when the
+    /// victory detonation consumes the level.
     pub fn obliterate(&mut self) {
         self.solids.clear();
         self.locked.clear();
@@ -411,7 +399,6 @@ impl Grid {
             Cell::Empty => [0, 0, 0, 0],
             Cell::Solid => [104, 112, 130, 255],
             Cell::Surface => [58, 92, 150, 255],
-            Cell::Trail => [70, 200, 150, 255],
         }
     }
 
@@ -504,7 +491,7 @@ mod tests {
         assert_eq!(Grid::dissolve_color(Cell::Solid, 1.0), Grid::color(Cell::Empty));
     }
 
-    /// The detonation wipes the whole board — solids, surface, trail and lock.
+    /// The detonation wipes the whole board — solids, surface and lock.
     #[test]
     fn obliterate_clears_everything() {
         let mut grid = grid();

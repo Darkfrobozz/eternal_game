@@ -229,7 +229,7 @@ fn spawn_level_explosion(commands: &mut Commands, grid: &Grid, center: Vec2) {
         Transform::from_xyz(center.x, center.y, BURST_Z + 1.0),
     ));
 
-    // Every non-empty cell (walls, surface and trail) becomes a burst. Large
+    // Every non-empty cell (walls and surface) becomes a burst. Large
     // levels are sampled down so the particle count stays bounded.
     let cells: Vec<IVec2> = (0..grid.h)
         .flat_map(|y| (0..grid.w).map(move |x| IVec2::new(x, y)))

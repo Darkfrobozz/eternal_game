@@ -55,7 +55,6 @@ fn cell_char(cell: Cell) -> char {
         Cell::Empty => '.',
         Cell::Solid => '#',
         Cell::Surface => '+',
-        Cell::Trail => 'o',
     }
 }
 
@@ -64,7 +63,9 @@ fn char_cell(c: char) -> Option<Cell> {
         '.' => Some(Cell::Empty),
         '#' => Some(Cell::Solid),
         '+' => Some(Cell::Surface),
-        'o' => Some(Cell::Trail),
+        // Legacy trail marker. The surface is rebuilt on load anyway, so this
+        // keeps older configs parseable without a `Trail` cell.
+        'o' => Some(Cell::Surface),
         _ => None,
     }
 }
@@ -467,7 +468,7 @@ pub fn replay(path: &str, max_steps: usize) {
         eprintln!("cannot read {path}");
         return;
     };
-    let Some((mut grid, place, tuning)) = parse(&text, Handle::default()) else {
+    let Some((grid, place, tuning)) = parse(&text, Handle::default()) else {
         eprintln!("could not parse {path}");
         return;
     };
@@ -496,7 +497,7 @@ pub fn replay(path: &str, max_steps: usize) {
             break;
         }
         let from = ball.cell;
-        crate::ball::step_once(&mut grid, &mut run, &mut ball);
+        crate::ball::step_once(&grid, &mut run, &mut ball);
         println!(
             "{i:4}: {from:?} -> {:?} dir={:?} charge={:.1}",
             ball.cell, ball.dir, ball.charge
